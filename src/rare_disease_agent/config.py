@@ -70,6 +70,24 @@ class PipelineConfig(BaseModel):
     random_seed: int = 42
 
 
+class VariantFilteringAgentConfig(BaseModel):
+    max_iterations: int = Field(default=10, ge=1, le=100)
+    max_tool_calls: int = Field(default=20, ge=1, le=200)
+    target_candidate_count: int = Field(default=250, ge=1)
+    minimum_candidate_count: int = Field(default=25, ge=1)
+    max_invalid_decisions: int = Field(default=3, ge=1, le=20)
+    max_tool_errors: int = Field(default=3, ge=1, le=20)
+    max_no_reduction_attempts: int = Field(default=3, ge=1, le=20)
+    max_repeated_decisions: int = Field(default=2, ge=1, le=20)
+    sample_size: int = Field(default=5, ge=1, le=25)
+
+
+class AgentsConfig(BaseModel):
+    variant_filtering: VariantFilteringAgentConfig = Field(
+        default_factory=VariantFilteringAgentConfig
+    )
+
+
 class Settings(BaseSettings):
     """Application settings.
 
@@ -88,6 +106,7 @@ class Settings(BaseSettings):
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
+    agents: AgentsConfig = Field(default_factory=AgentsConfig)
 
     @classmethod
     def settings_customise_sources(

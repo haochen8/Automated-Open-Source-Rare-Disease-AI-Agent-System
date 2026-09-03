@@ -3,8 +3,8 @@
 Local-first research software for the SageBio **Rare Disease, Real Kid: MVA Hackathon
 2026**. The intended system will prioritize candidate variants (Track 1), then develop
 evidence-backed drug-repurposing hypotheses (Track 2). This repository currently contains
-the safe Phase 0/1 foundation: configuration, privacy controls, hardware-aware model advice,
-and a deterministic synthetic VCF → Parquet → DuckDB pipeline.
+the safe Phase 0–2 foundation: configuration, privacy controls, hardware-aware model advice,
+a deterministic synthetic VCF → Parquet → DuckDB pipeline, and bounded autonomous filtering.
 
 > **Research use only.** This is not medical advice, a diagnostic system, or a clinical
 > decision-making tool. Any future drug candidates are research hypotheses only.
@@ -18,10 +18,10 @@ flowchart TD
     C --> D[Parquet]
     D --> E[DuckDB filtering and scoring]
     E --> F[Compact structured candidate evidence]
-    F --> G[Backend-agnostic agent layer — Phase 2+]
+    F --> G[Backend-neutral LangGraph variant agent]
     P[HPO and public databases] --> G
     G --> H[Independent critic]
-    H --> I[Auditable Track 1 ranking]
+    H --> I[Auditable candidate set — ranking is Phase 4]
     I --> J[Track 2 mechanism and drug research — later]
 
     L[One local 7B–8B Q4 model on M2] -. development .-> G
@@ -49,6 +49,7 @@ The recommendation command is inspection-only:
 rare-disease-agent models inspect-hardware
 rare-disease-agent models recommend
 rare-disease-agent models recommend --json
+rare-disease-agent models check qwen2.5:7b-instruct-q4_K_M
 ```
 
 It neither downloads weights nor starts a model. On a 16 GB Apple Silicon machine it applies
@@ -94,6 +95,38 @@ The parser streams records in bounded memory. Parquet writing uses bounded batch
 queries are parameterized. Annotation values in the fixture are synthetic stand-ins; production
 annotation will call established tools such as bcftools/VEP rather than ask an LLM to infer them.
 
+## Autonomous Phase 2 filtering
+
+Run the complete mock-driven workflow without Ollama or model weights:
+
+```bash
+rare-disease-agent agent-filter --input synthetic --backend mock
+```
+
+The planning agent inspects aggregate statistics, creates conservative, phenotype-ready, and
+pathogenicity branches, selects typed rarity/consequence/gene operations, unions the branches, and
+stops automatically. The LLM backend never receives SQL or shell access and never performs a filter.
+Every decision is schema-validated and written to `audit_log.jsonl` with its rationale, counts,
+model/backend, prompt version/hash, result, and false-negative risk. The run also produces
+`metrics.json` and `final_candidates.json` under the ignored private run directory.
+
+The bundled truth case has 18 synthetic variants. The deterministic mock plan finishes with 10
+candidates and preserves `SYNTH-CAUSAL-001`. This is an architecture/evaluation fixture, not a
+clinical example or evidence of scientific performance.
+
+Ollama is optional and must already be installed with an explicitly downloaded model:
+
+```bash
+rare-disease-agent agent-filter \
+  --input synthetic \
+  --backend ollama \
+  --model qwen2.5:7b-instruct-q4_K_M
+```
+
+Before the first Ollama request, the CLI and backend independently verify the parameter cap,
+quantization, total-memory fit, and live free-memory headroom. Phase 2 permits loopback Ollama
+endpoints only. An unsafe model or low-memory host is refused; no download is attempted.
+
 ## Configuration
 
 - `configs/default.yaml`: validated runtime defaults
@@ -121,10 +154,11 @@ independent barrier.
 ## Reproducibility and current limits
 
 The normalized schema captures variant, genotype, annotation, phenotype, and evidence fields.
-This first increment does not yet annotate VCFs, run agents, evaluate inheritance, contact public
-databases, or implement Track 2. The future audit trail will record model/runtime revisions,
-quantization, prompts, tool/database versions, filter parameters, seeds, source commit, and
-hardware. See [model selection](docs/model_selection.md) and the [Phase 2 proposal](docs/phase2.md).
+This increment does not yet annotate production VCFs, rank variants, evaluate real phenotypes or
+inheritance, contact public databases, or implement Track 2. The current audit captures Phase 2
+agent decisions and prompt/model identity; later phases will extend it with tool/database versions,
+source commit, and richer hardware provenance. See [model selection](docs/model_selection.md),
+[Phase 2 design](docs/phase2.md), and the [Phase 3 proposal](docs/phase3.md).
 
 ## License
 

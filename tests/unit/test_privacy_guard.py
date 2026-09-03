@@ -30,6 +30,15 @@ def test_allows_explicit_synthetic_fixture(tmp_path: Path) -> None:
     assert scan_paths([path], repository_root=tmp_path) == []
 
 
+def test_allows_bundled_explicit_synthetic_resource(tmp_path: Path) -> None:
+    fixture_dir = tmp_path / "src" / "rare_disease_agent" / "resources"
+    fixture_dir.mkdir(parents=True)
+    path = fixture_dir / "synthetic.vcf.txt"
+    path.write_text("##fileformat=VCFv4.3\n##synthetic=true\n#CHROM\tPOS\n", encoding="utf-8")
+
+    assert scan_paths([path], repository_root=tmp_path) == []
+
+
 def test_rejects_hugging_face_token(tmp_path: Path) -> None:
     path = tmp_path / "config.txt"
     fake_token = "hf_" + "abcdefghijklmnopqrstuvwxyz123456"

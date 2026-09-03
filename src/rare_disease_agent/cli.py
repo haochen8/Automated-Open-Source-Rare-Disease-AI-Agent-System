@@ -3,16 +3,28 @@
 from __future__ import annotations
 
 import json
+import re
+import uuid
+from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from rare_disease_agent import __version__
-from rare_disease_agent.models import inspect_hardware, recommend_models
+from rare_disease_agent.agents.variant_agent import VariantFilteringAgent
+from rare_disease_agent.config import load_settings
+from rare_disease_agent.llm.registry import default_registry
+from rare_disease_agent.models import (
+    check_model_suitability,
+    inspect_hardware,
+    recommend_models,
+)
 from rare_disease_agent.models.hardware import GIB
 from rare_disease_agent.storage.parquet import write_variants_parquet
 from rare_disease_agent.tools.variants.vcf import parse_vcf
+from rare_disease_agent.workflows.mock_strategy import default_mock_decisions
+from rare_disease_agent.workflows.track1_filtering import VariantFilteringWorkflow
 
 app = typer.Typer(
     name="rare-disease-agent",
@@ -116,6 +128,37 @@ def list_models() -> None:
     typer.echo("This command does not query a registry or download weights.")
 
 
+@models_app.command("check")
+def check_model_command(
+    model: Annotated[str, typer.Argument(help="Local model tag to evaluate.")],
+    allow_oversized: Annotated[
+        bool,
+        typer.Option(
+            "--allow-oversized",
+            help="Bypass only the conservative host-size ceiling; never bypass live-memory checks.",
+        ),
+    ] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON.")] = False,
+) -> None:
+    """Evaluate local model safety without downloading or starting it."""
+
+    suitability = check_model_suitability(
+        model,
+        inspect_hardware(),
+        allow_oversized=allow_oversized,
+    )
+    if as_json:
+        typer.echo(json.dumps(suitability.model_dump(), indent=2))
+    else:
+        status = "allowed" if suitability.allowed else "refused"
+        typer.echo(f"{model}: {status}")
+        for reason in suitability.reasons:
+            typer.echo(f"- {reason}")
+        typer.echo("No model was downloaded or started.")
+    if not suitability.allowed:
+        raise typer.Exit(code=2)
+
+
 @variants_app.command("prepare")
 def prepare_variants(
     input_path: Annotated[Path, typer.Argument(exists=True, dir_okay=False, readable=True)],
@@ -144,3 +187,111 @@ def prepare_variants(
         )
     count = write_variants_parquet(parse_vcf(input_path), output_path)
     typer.echo(f"Wrote {count} variant records to {output_path}")
+
+
+@app.command("agent-filter")
+def agent_filter(
+    input_source: Annotated[
+        str,
+        typer.Option(
+            "--input",
+            help="Use 'synthetic' or an explicitly marked synthetic VCF-like fixture.",
+        ),
+    ],
+    backend: Annotated[
+        str, typer.Option("--backend", help="LLM backend: mock or ollama.")
+    ] = "mock",
+    model: Annotated[str | None, typer.Option("--model", help="Explicit Ollama model tag.")] = None,
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", file_okay=False, help="Exact run output directory."),
+    ] = None,
+    run_id: Annotated[str | None, typer.Option("--run-id")] = None,
+    config_path: Annotated[
+        Path, typer.Option("--config", exists=True, dir_okay=False, readable=True)
+    ] = Path("configs/default.yaml"),
+    causal_variant_id: Annotated[
+        str | None,
+        typer.Option("--causal-variant-id", help="Synthetic truth ID used only for evaluation."),
+    ] = None,
+    allow_oversized: Annotated[
+        bool,
+        typer.Option(
+            "--allow-oversized",
+            help="Allow 14B only if live-memory and the absolute 14B cap still pass.",
+        ),
+    ] = False,
+) -> None:
+    """Run autonomous, synthetic-only, agent-controlled deterministic filtering."""
+
+    normalized_backend = backend.strip().lower()
+    if normalized_backend not in {"mock", "ollama"}:
+        raise typer.BadParameter("--backend must be 'mock' or 'ollama'")
+    settings = load_settings(config_path)
+    selected_run_id = run_id or f"phase2-{uuid.uuid4().hex[:12]}"
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", selected_run_id):
+        raise typer.BadParameter(
+            "--run-id must contain 1-64 letters, digits, underscores, or hyphens."
+        )
+    destination = output_dir or settings.paths.run_dir / selected_run_id
+    if destination.exists() and any(destination.iterdir()):
+        raise typer.BadParameter(f"Run output directory is not empty: {destination}")
+    destination.mkdir(parents=True, exist_ok=True)
+    parquet_path = destination / "synthetic_variants.parquet"
+
+    if input_source == "synthetic":
+        resource = files("rare_disease_agent.resources").joinpath("synthetic_phase2.vcf.txt")
+        with as_file(resource) as fixture_path:
+            write_variants_parquet(parse_vcf(fixture_path), parquet_path)
+        known_causal = causal_variant_id or "SYNTH-CAUSAL-001"
+    else:
+        fixture_path = Path(input_source)
+        if not fixture_path.is_file():
+            raise typer.BadParameter(f"Synthetic input does not exist: {fixture_path}")
+        try:
+            with fixture_path.open(encoding="utf-8") as handle:
+                prefix = handle.read(8_192)
+        except UnicodeDecodeError as exc:
+            raise typer.BadParameter("Synthetic input must be UTF-8 VCF text.") from exc
+        if "##synthetic=true" not in prefix:
+            raise typer.BadParameter(
+                "Phase 2 accepts only explicitly marked synthetic inputs; "
+                "real patient data is out of scope."
+            )
+        write_variants_parquet(parse_vcf(fixture_path), parquet_path)
+        known_causal = causal_variant_id
+
+    if normalized_backend == "mock":
+        llm_backend = default_registry.create("mock", structured_responses=default_mock_decisions())
+    else:
+        selected_model = model or settings.models.orchestrator.model
+        if not selected_model:
+            raise typer.BadParameter("An Ollama model must be configured or supplied with --model.")
+        suitability = check_model_suitability(
+            selected_model,
+            inspect_hardware(),
+            allow_oversized=allow_oversized,
+        )
+        if not suitability.allowed:
+            raise typer.BadParameter(
+                "Ollama preflight refused execution: " + " ".join(suitability.reasons)
+            )
+        llm_backend = default_registry.create(
+            "ollama",
+            model=selected_model,
+            base_url=settings.models.orchestrator.base_url or "http://127.0.0.1:11434",
+            allow_oversized=allow_oversized,
+        )
+
+    workflow = VariantFilteringWorkflow(
+        parquet_path=parquet_path,
+        agent=VariantFilteringAgent(llm_backend),
+        run_directory=destination,
+        config=settings.agents.variant_filtering,
+        run_id=selected_run_id,
+        causal_variant_id=known_causal,
+    )
+    result = workflow.run()
+    typer.echo(json.dumps(result.metrics.model_dump(), indent=2))
+    typer.echo(f"Audit: {result.audit_path}")
+    typer.echo(f"Candidates: {result.candidates_path}")

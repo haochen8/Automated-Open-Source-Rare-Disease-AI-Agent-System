@@ -15,6 +15,8 @@ def test_default_config_shares_one_local_model() -> None:
     assert settings.models.investigator.reuse_orchestrator_model is True
     assert settings.models.critic.reuse_orchestrator_model is True
     assert settings.privacy.allow_remote_patient_data is False
+    assert settings.agents.variant_filtering.max_iterations == 10
+    assert settings.agents.variant_filtering.minimum_candidate_count == 25
 
 
 def test_environment_overrides_yaml(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,4 +1,4 @@
-.PHONY: install test lint privacy models-recommend
+.PHONY: install test lint privacy models-recommend agent-filter
 
 install:
 	python3 -m pip install -e '.[dev]'
@@ -15,3 +15,6 @@ privacy:
 
 models-recommend:
 	rare-disease-agent models recommend
+
+agent-filter:
+	rare-disease-agent agent-filter --input synthetic --backend mock

@@ -41,3 +41,62 @@ def test_variants_prepare_command(tmp_path) -> None:
     assert result.exit_code == 0
     assert output.is_file()
     assert "Wrote 4 variant records" in result.stdout
+
+
+def test_agent_filter_mock_cli_runs_end_to_end(tmp_path) -> None:
+    output = tmp_path / "agent-run"
+
+    result = runner.invoke(
+        app,
+        [
+            "agent-filter",
+            "--input",
+            "synthetic",
+            "--backend",
+            "mock",
+            "--output-dir",
+            str(output),
+            "--run-id",
+            "cli-synthetic",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    metrics = json.loads((output / "metrics.json").read_text())
+    assert metrics["causal_variant_preserved"] is True
+    assert metrics["final_branch"] == "ensemble"
+    assert (output / "audit_log.jsonl").is_file()
+
+
+def test_agent_filter_rejects_non_synthetic_input(tmp_path) -> None:
+    source = tmp_path / "unmarked.txt"
+    source.write_text("##fileformat=VCFv4.3\n#CHROM\tPOS\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["agent-filter", "--input", str(source), "--output-dir", str(tmp_path / "run")],
+    )
+
+    assert result.exit_code != 0
+    assert "explicitly marked synthetic inputs" in result.output
+    assert "patient data is out of scope" in result.output
+
+
+def test_models_check_reports_refusal(monkeypatch) -> None:
+    hardware = HardwareInfo(
+        operating_system="macOS",
+        architecture="arm64",
+        cpu="Apple M2",
+        total_memory_gb=16,
+        available_memory_gb=1,
+        unified_memory_gb=16,
+        gpu="Apple integrated GPU (Metal)",
+        metal_supported=True,
+        free_disk_gb=100,
+    )
+    monkeypatch.setattr("rare_disease_agent.cli.inspect_hardware", lambda: hardware)
+
+    result = runner.invoke(app, ["models", "check", "qwen2.5:7b-instruct-q4_K_M", "--json"])
+
+    assert result.exit_code == 2
+    assert json.loads(result.stdout)["allowed"] is False

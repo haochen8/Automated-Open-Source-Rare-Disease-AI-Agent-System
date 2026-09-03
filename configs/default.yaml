@@ -30,3 +30,15 @@ pipeline:
   maximum_tool_calls: 100
   timeout_seconds: 3600
   random_seed: 42
+
+agents:
+  variant_filtering:
+    max_iterations: 10
+    max_tool_calls: 20
+    target_candidate_count: 250
+    minimum_candidate_count: 25
+    max_invalid_decisions: 3
+    max_tool_errors: 3
+    max_no_reduction_attempts: 3
+    max_repeated_decisions: 2
+    sample_size: 5

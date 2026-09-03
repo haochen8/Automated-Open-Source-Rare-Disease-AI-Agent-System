@@ -17,6 +17,11 @@ The catalog records approximate weight and runtime memory, not guarantees. KV ca
 runtime implementation, batch size, and other active applications change actual consumption. Always
 inspect live memory at launch time.
 
+`rare-disease-agent models check <tag>` applies both the installed-memory ceiling and live available
+memory plus 2 GB safety headroom. `--allow-oversized` can bypass the conservative 8B ceiling on a
+16 GB host only for a model at or below the absolute 14B development cap, and never bypasses current
+free-memory or Q4 checks. The optional Ollama backend repeats this preflight before first execution.
+
 Production can assign separate larger families to each role on a compliant GPU server through the
 same configurable backend interface. Raw patient data must not be sent to an external service until
 the data rules and deployment have been explicitly reviewed.

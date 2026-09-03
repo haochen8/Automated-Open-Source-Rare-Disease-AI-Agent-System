@@ -56,7 +56,10 @@ def _is_allowed_documentation(path: Path) -> bool:
 
 def _is_synthetic_fixture(path: Path, text: str) -> bool:
     normalized = path.as_posix().lstrip("./")
-    return normalized.startswith("tests/fixtures/") and "##synthetic=true" in text
+    allowed_location = normalized.startswith("tests/fixtures/") or normalized.startswith(
+        "src/rare_disease_agent/resources/"
+    )
+    return allowed_location and "##synthetic=true" in text
 
 
 def _is_model_source_module(path: Path) -> bool:
