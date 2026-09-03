@@ -1,0 +1,58 @@
+# Restricted and generated biomedical data
+/data/*
+!/data/README.md
+/private_data/
+/models/
+/cache/
+/runs/
+/results/
+/experiments/results/
+*.vcf
+*.vcf.gz
+*.gvcf
+*.gvcf.gz
+*.bcf
+*.bam
+*.bai
+*.cram
+*.crai
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+*.ped
+*.parquet
+*.duckdb
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+secrets/
+tokens/
+*.pem
+*.key
+
+# Model/runtime caches
+.ollama/
+.cache/
+qdrant_storage/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+dist/
+build/
+
+# Editors and macOS
+.DS_Store
+.idea/
+.vscode/

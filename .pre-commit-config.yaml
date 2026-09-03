@@ -1,0 +1,15 @@
+repos:
+  - repo: local
+    hooks:
+      - id: rare-disease-privacy-guard
+        name: Reject restricted genomic data and secrets
+        entry: python scripts/privacy_guard.py --staged
+        language: system
+        pass_filenames: false
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.12
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format

@@ -1,0 +1,11 @@
+##fileformat=VCFv4.3
+##synthetic=true
+##source=rare-disease-agent-test-only
+##INFO=<ID=GENE,Number=1,Type=String,Description="Synthetic gene symbol">
+##INFO=<ID=AF,Number=A,Type=Float,Description="Synthetic allele frequency">
+##INFO=<ID=CADD,Number=A,Type=Float,Description="Synthetic score">
+##INFO=<ID=CLNSIG,Number=1,Type=String,Description="Synthetic classification">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SYNTHETIC_SAMPLE
+1	10001	.	A	G	99	PASS	GENE=SYN1;TRANSCRIPT=TX_SYN1;CONSEQUENCE=missense_variant;HGVSP=p.Gly1Arg;AF=0.0001;CADD=28.0;REVEL=0.91;ALPHAMISSENSE=0.88;CLNSIG=Likely_pathogenic;PHENOTYPE_SCORE=0.82	GT:DP	0/1:40
+2	20002	rsSynthetic2	C	T	80	PASS	GENE=SYN2;CONSEQUENCE=synonymous_variant;AF=0.12;CADD=2.0;CLNSIG=Benign	GT:DP	1/1:35
+X	30003	.	G	A,C	70	PASS	GENE=SYN3;CONSEQUENCE=splice_region_variant;AF=0.004,0.006;CADD=18.5,19.5;INHERITANCE=x_linked	GT:DP	1:22

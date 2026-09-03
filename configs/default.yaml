@@ -1,0 +1,32 @@
+paths:
+  restricted_data_dir: ../rare-disease-private
+  public_cache_dir: cache/public
+  run_dir: runs/private
+
+privacy:
+  allow_remote_patient_data: false
+  redact_sensitive_logs: true
+
+models:
+  orchestrator:
+    backend: ollama
+    model: qwen2.5:7b-instruct-q4_K_M
+    size_class: small
+    max_local_parameters_billion: 14
+    base_url: http://127.0.0.1:11434
+  investigator:
+    backend: ollama
+    reuse_orchestrator_model: true
+  critic:
+    backend: ollama
+    reuse_orchestrator_model: true
+  embeddings:
+    backend: sentence_transformers
+    model: NeuML/pubmedbert-base-embeddings
+    device: auto
+
+pipeline:
+  maximum_agent_iterations: 20
+  maximum_tool_calls: 100
+  timeout_seconds: 3600
+  random_seed: 42

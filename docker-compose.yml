@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    volumes:
+      - ${RDA_RESTRICTED_DATA_DIR:-../rare-disease-private}:/restricted-data:ro
+      - ./runs:/app/runs
+    environment:
+      RDA_PATHS__RESTRICTED_DATA_DIR: /restricted-data
+
+# Model servers and weights are deliberately not bundled. On Apple Silicon,
+# run Ollama/MLX/llama.cpp natively and point the app at its local endpoint.

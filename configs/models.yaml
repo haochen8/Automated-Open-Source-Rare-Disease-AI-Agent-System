@@ -1,0 +1,22 @@
+# Development defaults intentionally share one local model. Model weights are
+# never downloaded by configuration loading or hardware inspection.
+development:
+  orchestrator: qwen2.5:7b-instruct-q4_K_M
+  investigator: reuse_orchestrator
+  critic: reuse_orchestrator
+  quantization: Q4_K_M
+  context_tokens: 8192
+  simultaneous_large_models: 1
+
+# Production examples demonstrate backend substitution only. These are not
+# local-development targets and do not authorize patient-data transfer.
+production_example:
+  orchestrator:
+    backend: openai_compatible_self_hosted
+    model: configurable-glm-family-model
+  investigator:
+    backend: openai_compatible_self_hosted
+    model: configurable-qwen-or-glm-family-model
+  critic:
+    backend: openai_compatible_self_hosted
+    model: configurable-deepseek-family-model

@@ -1,0 +1,12 @@
+# Copy to an ignored local path and adjust for the authorized environment.
+paths:
+  restricted_data_dir: /absolute/path/outside/this/repository
+
+models:
+  orchestrator:
+    backend: ollama
+    model: qwen2.5:7b-instruct-q4_K_M
+  investigator:
+    reuse_orchestrator_model: true
+  critic:
+    reuse_orchestrator_model: true

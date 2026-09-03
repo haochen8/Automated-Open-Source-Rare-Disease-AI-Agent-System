@@ -1,0 +1,8 @@
+track1:
+  weights:
+    phenotype: 0.25
+    pathogenicity: 0.20
+    rarity: 0.15
+    inheritance: 0.15
+    clinical_evidence: 0.15
+    literature: 0.10
