@@ -21,9 +21,13 @@ from rare_disease_agent.models import (
     recommend_models,
 )
 from rare_disease_agent.models.hardware import GIB
+from rare_disease_agent.ranking.schemas import SyntheticBenchmarkResult
+from rare_disease_agent.reporting.audit import AuditWriter
 from rare_disease_agent.storage.parquet import write_variants_parquet
+from rare_disease_agent.synthetic import SYNTHETIC_CASE_NAMES
 from rare_disease_agent.tools.variants.vcf import parse_vcf
-from rare_disease_agent.workflows.mock_strategy import default_mock_decisions
+from rare_disease_agent.workflows.mock_strategy import default_mock_decisions, phase3_mock_decisions
+from rare_disease_agent.workflows.track1_evidence import Track1EvidenceWorkflow
 from rare_disease_agent.workflows.track1_filtering import VariantFilteringWorkflow
 
 app = typer.Typer(
@@ -295,3 +299,122 @@ def agent_filter(
     typer.echo(json.dumps(result.metrics.model_dump(), indent=2))
     typer.echo(f"Audit: {result.audit_path}")
     typer.echo(f"Candidates: {result.candidates_path}")
+
+
+def _phase3_backend(*, backend: str, model: str | None, settings, allow_oversized: bool):
+    normalized = backend.strip().lower()
+    if normalized == "mock":
+        return default_registry.create("mock", structured_responses=phase3_mock_decisions())
+    if normalized != "ollama":
+        raise typer.BadParameter("--backend must be 'mock' or 'ollama'")
+    selected_model = model or settings.models.orchestrator.model
+    if not selected_model:
+        raise typer.BadParameter("An Ollama model must be configured or supplied with --model.")
+    suitability = check_model_suitability(
+        selected_model, inspect_hardware(), allow_oversized=allow_oversized
+    )
+    if not suitability.allowed:
+        raise typer.BadParameter(
+            "Ollama preflight refused execution: " + " ".join(suitability.reasons)
+        )
+    return default_registry.create(
+        "ollama",
+        model=selected_model,
+        base_url=settings.models.orchestrator.base_url or "http://127.0.0.1:11434",
+        allow_oversized=allow_oversized,
+    )
+
+
+@app.command("track1-synthetic")
+def track1_synthetic(
+    case: Annotated[
+        str,
+        typer.Option("--case", help="Synthetic case: " + ", ".join(SYNTHETIC_CASE_NAMES)),
+    ] = "de-novo",
+    backend: Annotated[
+        str, typer.Option("--backend", help="LLM backend: mock or ollama.")
+    ] = "mock",
+    model: Annotated[str | None, typer.Option("--model", help="Explicit Ollama model tag.")] = None,
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", file_okay=False, help="Exact run output directory."),
+    ] = None,
+    run_id: Annotated[str | None, typer.Option("--run-id")] = None,
+    config_path: Annotated[
+        Path, typer.Option("--config", exists=True, dir_okay=False, readable=True)
+    ] = Path("configs/default.yaml"),
+    allow_oversized: Annotated[
+        bool,
+        typer.Option("--allow-oversized", help="Never bypasses live-memory or the 14B cap."),
+    ] = False,
+) -> None:
+    """Run one completely synthetic phenotype and inheritance Track 1 case."""
+
+    if case not in SYNTHETIC_CASE_NAMES:
+        raise typer.BadParameter("--case must be one of: " + ", ".join(SYNTHETIC_CASE_NAMES))
+    settings = load_settings(config_path)
+    selected_run_id = run_id or f"phase3-{case}-{uuid.uuid4().hex[:8]}"
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", selected_run_id):
+        raise typer.BadParameter(
+            "--run-id must contain 1-64 letters, digits, underscores, or hyphens."
+        )
+    destination = output_dir or settings.paths.run_dir / selected_run_id
+    if destination.exists() and any(destination.iterdir()):
+        raise typer.BadParameter(f"Run output directory is not empty: {destination}")
+    llm_backend = _phase3_backend(
+        backend=backend,
+        model=model,
+        settings=settings,
+        allow_oversized=allow_oversized,
+    )
+    result = Track1EvidenceWorkflow(
+        case_name=case,
+        backend=llm_backend,
+        settings=settings,
+        run_directory=destination,
+        run_id=selected_run_id,
+    ).run()
+    typer.echo(json.dumps(result.metrics.model_dump(mode="json"), indent=2))
+    typer.echo(f"Ranking: {result.ranking_path}")
+    typer.echo(f"Evidence: {result.evidence_path}")
+
+
+@app.command("benchmark-synthetic")
+def benchmark_synthetic(
+    output_dir: Annotated[
+        Path, typer.Option("--output-dir", file_okay=False, help="Empty benchmark directory.")
+    ] = Path("runs/private/phase3-benchmark"),
+    config_path: Annotated[
+        Path, typer.Option("--config", exists=True, dir_okay=False, readable=True)
+    ] = Path("configs/default.yaml"),
+) -> None:
+    """Run every Phase 3 case offline with a fresh deterministic mock LLM."""
+
+    if output_dir.exists() and any(output_dir.iterdir()):
+        raise typer.BadParameter(f"Benchmark output directory is not empty: {output_dir}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    settings = load_settings(config_path)
+    metrics = []
+    for case in SYNTHETIC_CASE_NAMES:
+        backend = default_registry.create("mock", structured_responses=phase3_mock_decisions())
+        result = Track1EvidenceWorkflow(
+            case_name=case,
+            backend=backend,
+            settings=settings,
+            run_directory=output_dir / case,
+            run_id=f"benchmark-{case}",
+        ).run()
+        metrics.append(result.metrics)
+    summary = SyntheticBenchmarkResult(
+        cases=metrics,
+        all_causal_variants_preserved=all(item.causal_variant_preserved for item in metrics),
+        top_5_rate=sum(item.top_5 for item in metrics) / len(metrics),
+        inheritance_model_accuracy=(
+            sum(item.true_inheritance_model_identified for item in metrics) / len(metrics)
+        ),
+        peak_process_rss_mb=max(item.process_rss_mb_end for item in metrics),
+    )
+    summary_path = output_dir / "benchmark_summary.json"
+    AuditWriter._write_json(summary_path, summary)
+    typer.echo(json.dumps(summary.model_dump(mode="json"), indent=2))
+    typer.echo(f"Summary: {summary_path}")

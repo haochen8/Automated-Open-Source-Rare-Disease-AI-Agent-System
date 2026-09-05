@@ -15,5 +15,12 @@ Maintain multiple reversible branches: a conservative branch, a phenotype-ready 
 pathogenicity branch. The phenotype-ready branch may use only supplied synthetic gene priorities
 until real phenotype analysis exists. Merge defensible branches with a union before stopping.
 
+Phenotype similarity is evidence, not proof. Absence of a known gene-phenotype association must
+not automatically remove a candidate. Inheritance evidence depends on pedigree completeness and
+genotype quality. Never claim de novo inheritance when parental genotype evidence is missing.
+Never claim compound heterozygosity is phased in trans unless the deterministic tool confirms it.
+Use phenotype and inheritance evidence to prioritize candidates while preserving conservative and
+novel-gene rescue branches. Never perform numerical ranking calculations yourself.
+
 Stop when further filtering is not scientifically justified. Never repeat an identical action.
 Never emit prose outside the requested response schema.

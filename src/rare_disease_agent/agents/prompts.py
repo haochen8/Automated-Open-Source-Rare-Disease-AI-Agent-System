@@ -5,13 +5,13 @@ from __future__ import annotations
 import hashlib
 from importlib.resources import files
 
-PROMPT_VERSION = "variant-filtering-v1"
+PROMPT_VERSION = "variant-filtering-v2"
 
 
 def load_variant_filtering_prompt() -> str:
     return (
         files("rare_disease_agent.prompts")
-        .joinpath("variant_filtering_v1.txt")
+        .joinpath("variant_filtering_v2.txt")
         .read_text(encoding="utf-8")
     )
 

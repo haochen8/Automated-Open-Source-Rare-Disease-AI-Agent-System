@@ -9,6 +9,7 @@ remain separate. Final report generation must eventually perform rule-aware reda
 validation before any artifact leaves the controlled environment.
 
 The pre-commit guard rejects known genomic and analytical file types even if `.gitignore` is
-misconfigured. Synthetic fixtures are permitted only in the dedicated test-fixture path with an
-explicit marker. Treat a passing automated check as necessary, not sufficient: review staged files
-before every public push.
+misconfigured. Synthetic VCF-like fixtures are permitted only in dedicated test or bundled-resource
+paths with an explicit marker. The miniature Phase 3 HPO associations and pedigrees contain only
+invented genes, diseases, and individuals. Treat a passing automated check as necessary, not
+sufficient: review staged files before every public push.

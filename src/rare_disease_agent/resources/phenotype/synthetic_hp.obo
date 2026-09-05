@@ -1,0 +1,57 @@
+format-version: 1.4
+data-version: synthetic-hpo-2026-09-03
+
+[Term]
+id: HP:0000001
+name: All
+
+[Term]
+id: HP:0000118
+name: Phenotypic abnormality
+is_a: HP:0000001 ! All
+
+[Term]
+id: HP:0000707
+name: Abnormality of the nervous system
+is_a: HP:0000118 ! Phenotypic abnormality
+
+[Term]
+id: HP:0001250
+name: Seizure
+is_a: HP:0000707 ! Abnormality of the nervous system
+
+[Term]
+id: HP:0002069
+name: Generalized tonic-clonic seizure
+is_a: HP:0001250 ! Seizure
+
+[Term]
+id: HP:0001249
+name: Intellectual disability
+is_a: HP:0000707 ! Abnormality of the nervous system
+
+[Term]
+id: HP:0001263
+name: Global developmental delay
+is_a: HP:0001249 ! Intellectual disability
+
+[Term]
+id: HP:0004322
+name: Short stature
+is_a: HP:0000118 ! Phenotypic abnormality
+
+[Term]
+id: HP:0001629
+name: Ventricular septal defect
+is_a: HP:0000118 ! Phenotypic abnormality
+
+[Term]
+id: HP:0002019
+name: Constipation
+is_a: HP:0000118 ! Phenotypic abnormality
+
+[Term]
+id: HP:0009999
+name: obsolete Synthetic seizure term
+is_obsolete: true
+replaced_by: HP:0001250

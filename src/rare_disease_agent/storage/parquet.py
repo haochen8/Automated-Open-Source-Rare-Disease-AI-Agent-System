@@ -30,6 +30,7 @@ VARIANT_SCHEMA = pa.schema(
         ("alphamissense_score", pa.float64()),
         ("zygosity", pa.string()),
         ("inheritance_information", pa.string()),
+        ("genotype_calls_json", pa.string()),
         ("phenotype_score", pa.float64()),
         ("evidence_score", pa.float64()),
     ]

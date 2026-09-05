@@ -88,6 +88,28 @@ class AgentsConfig(BaseModel):
     )
 
 
+class PreliminaryScoringConfig(BaseModel):
+    quality: float = Field(default=0.10, ge=0, le=1)
+    rarity: float = Field(default=0.20, ge=0, le=1)
+    consequence: float = Field(default=0.15, ge=0, le=1)
+    phenotype: float = Field(default=0.30, ge=0, le=1)
+    inheritance: float = Field(default=0.25, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def weights_must_sum_to_one(self) -> PreliminaryScoringConfig:
+        if abs(sum(self.model_dump().values()) - 1.0) > 1e-9:
+            raise ValueError("track1.preliminary_scoring weights must sum to 1.0")
+        return self
+
+
+class Track1Config(BaseModel):
+    preliminary_scoring: PreliminaryScoringConfig = Field(default_factory=PreliminaryScoringConfig)
+    phenotype_priority_threshold: float = Field(default=0.35, ge=0, le=1)
+    inheritance_priority_threshold: float = Field(default=0.80, ge=0, le=1)
+    minimum_genotype_quality: float = Field(default=20, ge=0)
+    evidence_summary_limit: int = Field(default=10, ge=1, le=25)
+
+
 class Settings(BaseSettings):
     """Application settings.
 
@@ -107,6 +129,7 @@ class Settings(BaseSettings):
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
+    track1: Track1Config = Field(default_factory=Track1Config)
 
     @classmethod
     def settings_customise_sources(

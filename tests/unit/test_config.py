@@ -17,6 +17,8 @@ def test_default_config_shares_one_local_model() -> None:
     assert settings.privacy.allow_remote_patient_data is False
     assert settings.agents.variant_filtering.max_iterations == 10
     assert settings.agents.variant_filtering.minimum_candidate_count == 25
+    assert sum(settings.track1.preliminary_scoring.model_dump().values()) == 1
+    assert settings.track1.minimum_genotype_quality == 20
 
 
 def test_environment_overrides_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -45,3 +47,8 @@ def test_non_mapping_yaml_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="root must be a mapping"):
         load_settings(path)
+
+
+def test_preliminary_scoring_weights_must_sum_to_one() -> None:
+    with pytest.raises(ValidationError, match="sum to 1.0"):
+        Settings(track1={"preliminary_scoring": {"phenotype": 0.9}})

@@ -100,3 +100,39 @@ def test_models_check_reports_refusal(monkeypatch) -> None:
 
     assert result.exit_code == 2
     assert json.loads(result.stdout)["allowed"] is False
+
+
+def test_track1_synthetic_cli_reports_causal_rank(tmp_path) -> None:
+    output = tmp_path / "track1"
+
+    result = runner.invoke(
+        app,
+        [
+            "track1-synthetic",
+            "--case",
+            "de-novo",
+            "--output-dir",
+            str(output),
+            "--run-id",
+            "cli-phase3",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    metrics = json.loads((output / "track1_metrics.json").read_text())
+    assert metrics["causal_variant_rank"] == 1
+    assert metrics["top_1"] is True
+    assert (output / "provenance.json").is_file()
+
+
+def test_benchmark_synthetic_cli_runs_all_cases(tmp_path) -> None:
+    output = tmp_path / "benchmark"
+
+    result = runner.invoke(app, ["benchmark-synthetic", "--output-dir", str(output)])
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads((output / "benchmark_summary.json").read_text())
+    assert len(summary["cases"]) == 6
+    assert summary["all_causal_variants_preserved"] is True
+    assert summary["top_5_rate"] == 1
+    assert summary["inheritance_model_accuracy"] == 1

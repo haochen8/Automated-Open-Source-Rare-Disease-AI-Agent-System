@@ -42,3 +42,15 @@ agents:
     max_no_reduction_attempts: 3
     max_repeated_decisions: 2
     sample_size: 5
+
+track1:
+  preliminary_scoring:
+    quality: 0.10
+    rarity: 0.20
+    consequence: 0.15
+    phenotype: 0.30
+    inheritance: 0.25
+  phenotype_priority_threshold: 0.35
+  inheritance_priority_threshold: 0.80
+  minimum_genotype_quality: 20
+  evidence_summary_limit: 10

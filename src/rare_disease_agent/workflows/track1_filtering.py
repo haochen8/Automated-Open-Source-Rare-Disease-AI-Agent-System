@@ -22,6 +22,8 @@ from rare_disease_agent.agents.variant_agent import VariantFilteringAgent
 from rare_disease_agent.config import VariantFilteringAgentConfig
 from rare_disease_agent.llm.errors import LLMError, LLMUnavailableError, StructuredOutputError
 from rare_disease_agent.reporting.audit import AuditWriter
+from rare_disease_agent.tools.inheritance.schemas import InheritanceSummary
+from rare_disease_agent.tools.phenotype.schemas import GenePhenotypeSummary
 from rare_disease_agent.tools.variants.agent_tools import VariantToolbox, VariantToolError
 
 REDUCTION_ACTIONS = {
@@ -62,12 +64,16 @@ class VariantFilteringWorkflow:
         causal_variant_id: str | None = None,
         toolbox: VariantToolbox | None = None,
     ) -> None:
-        self.toolbox = toolbox or VariantToolbox(parquet_path)
+        self.audit = AuditWriter(run_directory)
+        self.toolbox = toolbox or VariantToolbox(
+            parquet_path,
+            run_id=run_id,
+            membership_database=self.audit.run_directory / "candidate_membership.duckdb",
+        )
         self.agent = agent
         self.config = config
         self.run_id = run_id
         self.causal_variant_id = causal_variant_id
-        self.audit = AuditWriter(run_directory)
         self.graph = self._build_graph()
 
     def _initial_inspection(self, raw: VariantFilteringState | dict[str, Any]) -> dict[str, Any]:
@@ -167,6 +173,7 @@ class VariantFilteringWorkflow:
             prompt_hash=self.agent.prompt_hash,
             outcome=outcome,
             feedback=observation.feedback,
+            observation_data=observation.data,
         )
         state.filter_history.append(record)
         self.audit.write_decision(record)
@@ -276,6 +283,20 @@ class VariantFilteringWorkflow:
         state.current_variant_count = observation.after_count
         state.last_observation = observation
         state.candidate_sets = self.toolbox.candidate_summaries()
+        if decision.action == "get_patient_hpo_summary":
+            state.patient_hpo_count = int(observation.data.get("term_count", 0))
+        elif decision.action == "rank_genes_by_phenotype":
+            state.phenotype_evaluated = True
+            state.top_phenotype_genes = [
+                GenePhenotypeSummary.model_validate(item)
+                for item in observation.data.get("top_genes", [])
+            ]
+        elif decision.action == "evaluate_inheritance":
+            state.inheritance_evaluated = True
+            state.inheritance_summary = [
+                InheritanceSummary.model_validate(item)
+                for item in observation.data.get("summaries", [])
+            ]
         self._record(state, decision, observation, "executed")
 
         if state.no_reduction_attempts >= self.config.max_no_reduction_attempts:
@@ -329,6 +350,10 @@ class VariantFilteringWorkflow:
             max_tool_calls=self.config.max_tool_calls,
             target_candidate_count=self.config.target_candidate_count,
             minimum_candidate_count=self.config.minimum_candidate_count,
+            phenotype_available=self.toolbox.patient_hpo_count > 0,
+            patient_hpo_count=self.toolbox.patient_hpo_count,
+            pedigree_available=self.toolbox.pedigree_available,
+            inheritance_available=self.toolbox.pedigree_available,
         )
         raw_result = self.graph.invoke(
             initial_state,

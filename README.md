@@ -3,8 +3,9 @@
 Local-first research software for the SageBio **Rare Disease, Real Kid: MVA Hackathon
 2026**. The intended system will prioritize candidate variants (Track 1), then develop
 evidence-backed drug-repurposing hypotheses (Track 2). This repository currently contains
-the safe Phase 0–2 foundation: configuration, privacy controls, hardware-aware model advice,
-a deterministic synthetic VCF → Parquet → DuckDB pipeline, and bounded autonomous filtering.
+the safe Phase 0–3 foundation: configuration, privacy controls, hardware-aware model advice,
+a deterministic synthetic VCF → Parquet → DuckDB pipeline, bounded autonomous filtering,
+phenotype and inheritance evidence, and preliminary variant ranking.
 
 > **Research use only.** This is not medical advice, a diagnostic system, or a clinical
 > decision-making tool. Any future drug candidates are research hypotheses only.
@@ -19,9 +20,10 @@ flowchart TD
     D --> E[DuckDB filtering and scoring]
     E --> F[Compact structured candidate evidence]
     F --> G[Backend-neutral LangGraph variant agent]
-    P[HPO and public databases] --> G
-    G --> H[Independent critic]
-    H --> I[Auditable candidate set — ranking is Phase 4]
+    P[Versioned HPO associations] --> E
+    Q[Typed pedigree genotypes] --> E
+    G --> H[Deterministic Phase 3 ranker]
+    H --> I[Auditable ranked candidate set]
     I --> J[Track 2 mechanism and drug research — later]
 
     L[One local 7B–8B Q4 model on M2] -. development .-> G
@@ -123,9 +125,37 @@ rare-disease-agent agent-filter \
   --model qwen2.5:7b-instruct-q4_K_M
 ```
 
-Before the first Ollama request, the CLI and backend independently verify the parameter cap,
+Before each Ollama request, the CLI and backend independently verify the parameter cap,
 quantization, total-memory fit, and live free-memory headroom. Phase 2 permits loopback Ollama
 endpoints only. An unsafe model or low-memory host is refused; no download is attempted.
+
+## Phase 3 phenotype, inheritance, and ranking
+
+Run one end-to-end synthetic case with the mock backend:
+
+```bash
+rare-disease-agent track1-synthetic --case de-novo
+```
+
+Available cases are `de-novo`, `recessive`, `compound-het`, `x-linked`,
+`phenotype-incomplete`, and `novel-gene`. Run the complete offline benchmark with:
+
+```bash
+rare-disease-agent benchmark-synthetic --output-dir /tmp/phase3-benchmark
+```
+
+The agent chooses typed evidence operations, but deterministic tools validate HPO identifiers,
+calculate Resnik best-match-average gene similarity, evaluate pedigree/genotype inheritance, and
+compute the weighted ranking. The LLM never performs scoring math or receives whole genotype
+tables. DuckDB persists branch membership and per-ablation scores; serialized graph state keeps
+only compact gene and inheritance summaries.
+
+Each run emits ranked candidates, phenotype/inheritance evidence, four ranking ablations, an
+incomplete-phenotype ablation, causal rank/top-k metrics, and software/data provenance. The bundled
+HPO and case data are synthetic. A public-only, allow-listed importer is available for pinned HPO
+release artifacts, but no public dataset is downloaded automatically. HPO publishes its ontology
+through the [official OBO PURL](http://purl.obolibrary.org/obo/hp.obo) and versioned
+[release assets](https://github.com/obophenotype/human-phenotype-ontology/releases).
 
 ## Configuration
 
@@ -154,11 +184,11 @@ independent barrier.
 ## Reproducibility and current limits
 
 The normalized schema captures variant, genotype, annotation, phenotype, and evidence fields.
-This increment does not yet annotate production VCFs, rank variants, evaluate real phenotypes or
-inheritance, contact public databases, or implement Track 2. The current audit captures Phase 2
-agent decisions and prompt/model identity; later phases will extend it with tool/database versions,
-source commit, and richer hardware provenance. See [model selection](docs/model_selection.md),
-[Phase 2 design](docs/phase2.md), and the [Phase 3 proposal](docs/phase3.md).
+Phase 3 does not annotate production VCFs, use real patient phenotypes, query literature, enrich
+ClinVar/VEP, generate official submissions, or implement Track 2. The preliminary score weights are
+benchmarkable defaults, not claims of clinical optimality. See [model selection](docs/model_selection.md),
+[Phase 2](docs/phase2.md), [Phase 3](docs/phase3.md), and the recommended
+[Phase 4 plan](docs/phase4.md).
 
 ## License
 

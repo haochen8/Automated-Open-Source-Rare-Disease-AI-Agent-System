@@ -1,3 +1,5 @@
+import json
+from importlib.resources import as_file
 from pathlib import Path
 
 import pytest
@@ -37,3 +39,14 @@ def test_rejects_missing_fileformat(tmp_path: Path) -> None:
 
     with pytest.raises(VCFParseError, match="fileformat"):
         list(parse_vcf(path))
+
+
+def test_multisample_genotypes_and_quality_are_preserved() -> None:
+    from rare_disease_agent.synthetic.cases import load_synthetic_case
+
+    with as_file(load_synthetic_case("de-novo").vcf_resource) as path:
+        record = next(parse_vcf(path))
+    calls = json.loads(record.genotype_calls_json)
+
+    assert calls["PROBAND"] == {"genotype": "0/1", "quality": 60.0}
+    assert calls["MOTHER"]["genotype"] == "0/0"

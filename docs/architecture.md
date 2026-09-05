@@ -2,8 +2,9 @@
 
 ## Scope
 
-Phases 0–2 create the repository foundation, a normalized VCF → Parquet → DuckDB flow, and a
-bounded agent-controlled filtering workflow proven with synthetic data. Track 2 remains deferred.
+Phases 0–3 create the repository foundation, a normalized VCF → Parquet → DuckDB flow, a bounded
+agent-controlled filtering workflow, and deterministic phenotype/inheritance ranking proven with
+synthetic data. Track 2 remains deferred.
 
 ## Separation of concerns
 
@@ -14,9 +15,10 @@ bounded agent-controlled filtering workflow proven with synthetic data. Track 2 
 5. LLM inference is a replaceable protocol. Scientific processing does not import a model SDK.
 6. Public-source caches and restricted run artifacts have distinct configured paths.
 
-The normalized Phase 1 record includes chromosome, position, alleles, identifier, gene/transcript,
-consequence, protein change, genotype/zygosity, quality, allele frequency, ClinVar classification,
-three optional pathogenicity scores, inheritance notes, and later phenotype/evidence scores.
+The normalized record includes chromosome, position, alleles, identifier, gene/transcript,
+consequence, protein change, proband and multi-sample genotype calls, genotype quality, variant
+quality, allele frequency, ClinVar classification, three optional pathogenicity scores,
+inheritance notes, and phenotype/evidence score fields.
 
 ## Hardware boundary
 
@@ -49,9 +51,44 @@ Termination is enforced by iteration and tool-call budgets, invalid-response and
 canonical repeated-decision detection, no-reduction limits, and an explicit stop action. The target
 candidate count is context for the planner, never an automatic mandate to over-filter.
 
-The Phase 2 branch index is deliberately in memory because this phase accepts synthetic inputs only.
-The typed tool boundary allows a later DuckDB-temporary-table or persisted-Parquet implementation to
-replace it for patient-scale datasets without changing agent decisions or graph transitions.
+## Phase 3 evidence and ranking
+
+The same agent loop adds four typed actions: validate the patient HPO set, rank candidate genes by
+phenotype, evaluate inheritance hypotheses, and create evidence branches. Only compact top-gene and
+inheritance-count summaries enter LangGraph state. Full genotype calls, variant rows, scores, and
+branch membership remain outside the prompt.
+
+The phenotype layer loads an OBO ontology and a replaceable gene-association TSV. It validates HPO
+syntax, reports unknown or invalid terms, resolves supported obsolete replacements, and calculates a
+reproducible Resnik best-match-average score. A miniature checksum-pinned synthetic release supports
+offline CI. The explicit public importer accepts only unauthenticated HTTPS artifacts from approved
+HPO hosts, limits response size, optionally verifies a pinned checksum, and records source, release,
+timestamp, checksum, and license reference.
+
+Inheritance evaluators operate on extensible pedigrees and typed genotype calls. They emit evidence,
+fit, quality status, and warnings for autosomal dominant, homozygous/autosomal recessive, de novo,
+X-linked, and compound-heterozygous models. Missing parental calls keep de novo evidence uncertain.
+Compound-heterozygous phase is `confirmed_trans` only when opposite parental origins are observed;
+otherwise it remains `possible_trans` or `unknown`.
+
+The preliminary ranker computes separately inspectable quality, rarity, consequence, phenotype, and
+inheritance features. Configurable defaults are a weighted linear baseline, not a scientific
+optimality claim. Four automatic ablations compare filtering only, phenotype, inheritance, and both.
+An additional ablation removes one HPO term.
+
+## Persistent branch design
+
+Candidate membership is now persisted in a run-local DuckDB database with `run_id`, `variant_id`,
+`branch`, `stage`, `active`, and `reason_code`. Filters create new rows by parameterized SQL templates;
+source branches remain unchanged. Phase 3 constructs conservative, phenotype-priority,
+inheritance-priority, pathogenicity-priority, and novel-gene-rescue branches before unioning them.
+The rescue branch ensures absence of a known HPO association is never treated as exclusion evidence.
+Per-ablation ranking features and ranks are also persisted in DuckDB.
+
+The current synthetic implementation materializes small evidence result lists while calculating
+features. Before genome-scale real-data execution, those complete phenotype/inheritance evidence
+tables should be streamed into DuckDB/Parquet as well; the graph-state and membership boundaries do
+not need to change.
 
 ## Privacy defense in depth
 
@@ -61,7 +98,7 @@ replace it for patient-scale datasets without changing agent decisions or graph 
   and contain `##synthetic=true`.
 - Structured logging redacts patient/genotype/variant/credential-like fields by default.
 - Remote patient-data transfer defaults to false.
-- External LangSmith tracing is disabled in the environment example; Phase 2 audit stays local.
+- External LangSmith tracing is disabled in the environment example; audits stay local.
 
 The guard is intentionally conservative. It supplements rather than replaces operational access
 controls and manual review.
@@ -69,7 +106,11 @@ controls and manual review.
 ## Failure and scaling characteristics
 
 The VCF parser yields one normalized record at a time. Parquet writing batches 10,000 records, so
-memory is bounded. DuckDB reads Parquet directly and returns at most 10,000 rows through the typed
-filter API. Multi-allelic lines are split into one normalized record per alternate allele. This
-prototype assumes one sample and pre-normalized annotations; mature cohort and annotation handling
-will use established bioinformatics tools.
+memory is bounded. DuckDB reads Parquet directly and branch membership never enters LangGraph state.
+Multi-allelic lines are split into one normalized record per alternate allele. Multi-sample `GT` and
+`GQ` values are retained as structured JSON for deterministic inheritance evaluation. The parser
+still assumes pre-normalized synthetic annotations; mature cohort and annotation handling will use
+established bioinformatics tools.
+
+Each Phase 3 run records prompt identity, tool/data versions, method parameters, Git commit and dirty
+status, Python and dependency versions, the HPO checksum, causal top-k metrics, and memory use.

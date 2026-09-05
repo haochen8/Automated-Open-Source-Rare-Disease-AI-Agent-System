@@ -7,6 +7,7 @@ annotation remains the responsibility of established tools such as bcftools and 
 from __future__ import annotations
 
 import gzip
+import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TextIO
@@ -39,6 +40,7 @@ class VariantRecord(BaseModel):
     alphamissense_score: float | None = Field(default=None, ge=0, le=1)
     zygosity: str | None = None
     inheritance_information: str | None = None
+    genotype_calls_json: str | None = None
     phenotype_score: float | None = Field(default=None, ge=0, le=1)
     evidence_score: float | None = Field(default=None, ge=0, le=1)
 
@@ -93,6 +95,18 @@ def _genotype(format_value: str | None, sample_value: str | None) -> str | None:
         return None
 
 
+def _genotype_call(format_value: str, sample_value: str) -> dict[str, object]:
+    keys = format_value.split(":")
+    values = sample_value.split(":")
+    fields = dict(zip(keys, values, strict=False))
+    quality_raw = fields.get("GQ")
+    try:
+        quality = float(quality_raw) if quality_raw not in {None, "", "."} else None
+    except ValueError as exc:
+        raise VCFParseError(f"Expected numeric genotype quality, got {quality_raw!r}") from exc
+    return {"genotype": fields.get("GT"), "quality": quality}
+
+
 def _zygosity(genotype: str | None) -> str | None:
     if not genotype or genotype in {".", "./.", ".|."}:
         return None
@@ -108,7 +122,9 @@ def _zygosity(genotype: str | None) -> str | None:
     return "compound_alternate"
 
 
-def _record_from_columns(columns: list[str], *, line_number: int) -> list[VariantRecord]:
+def _record_from_columns(
+    columns: list[str], *, line_number: int, sample_names: list[str]
+) -> list[VariantRecord]:
     if len(columns) < 8:
         raise VCFParseError(f"Line {line_number}: expected at least 8 VCF columns")
     chromosome, position_raw, identifier, reference, alternates, quality_raw, _, info_raw = columns[
@@ -123,6 +139,10 @@ def _record_from_columns(columns: list[str], *, line_number: int) -> list[Varian
         columns[8] if len(columns) > 8 else None,
         columns[9] if len(columns) > 9 else None,
     )
+    genotype_calls = {
+        sample: _genotype_call(columns[8], value)
+        for sample, value in zip(sample_names, columns[9:], strict=False)
+    }
     records: list[VariantRecord] = []
     alternate_values = alternates.split(",")
     for alternate_index, alternate in enumerate(alternate_values):
@@ -181,6 +201,11 @@ def _record_from_columns(columns: list[str], *, line_number: int) -> list[Varian
                 ),
                 zygosity=_zygosity(genotype),
                 inheritance_information=info.get("INHERITANCE"),
+                genotype_calls_json=(
+                    json.dumps(genotype_calls, sort_keys=True, separators=(",", ":"))
+                    if genotype_calls
+                    else None
+                ),
                 phenotype_score=_optional_float(info.get("PHENOTYPE_SCORE")),
                 evidence_score=_optional_float(info.get("EVIDENCE_SCORE")),
             )
@@ -196,6 +221,7 @@ def parse_vcf(path: Path | str) -> Iterator[VariantRecord]:
         raise FileNotFoundError(f"VCF does not exist: {input_path}")
     saw_fileformat = False
     saw_header = False
+    sample_names: list[str] = []
     with _open_text(input_path) as handle:
         for line_number, raw_line in enumerate(handle, start=1):
             line = raw_line.rstrip("\r\n")
@@ -208,12 +234,16 @@ def parse_vcf(path: Path | str) -> Iterator[VariantRecord]:
                 continue
             if line.startswith("#CHROM"):
                 saw_header = True
+                header_columns = line.split("\t")
+                sample_names = header_columns[9:] if len(header_columns) > 9 else []
                 continue
             if line.startswith("#"):
                 continue
             if not saw_header:
                 raise VCFParseError(f"Line {line_number}: variant encountered before #CHROM header")
-            yield from _record_from_columns(line.split("\t"), line_number=line_number)
+            yield from _record_from_columns(
+                line.split("\t"), line_number=line_number, sample_names=sample_names
+            )
     if not saw_fileformat:
         raise VCFParseError("Missing ##fileformat=VCF header")
     if not saw_header:

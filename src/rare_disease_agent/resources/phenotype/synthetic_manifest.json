@@ -1,0 +1,8 @@
+{
+  "source": "rare-disease-agent synthetic Phase 3 fixture",
+  "release": "synthetic-hpo-2026-09-03",
+  "downloaded_at": "2026-09-03T00:00:00Z",
+  "checksum": "2382f8793d3ceb19627d300abad4a41a5746e2bf132b4ad5130f79f5c3a65ecf",
+  "license_reference": "Repository LICENSE; synthetic data only",
+  "synthetic": true
+}

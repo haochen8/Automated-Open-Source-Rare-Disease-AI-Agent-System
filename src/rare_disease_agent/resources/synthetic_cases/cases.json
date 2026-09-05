@@ -1,0 +1,44 @@
+{
+  "de-novo": {
+    "vcf": "de_novo.vcf.txt",
+    "hpo_terms": ["HP:0001250", "HP:0001263"],
+    "causal_variant_id": "SYNTH-CAUSAL-001",
+    "causal_gene": "SYN_CAUSAL",
+    "expected_model": "de_novo"
+  },
+  "recessive": {
+    "vcf": "recessive.vcf.txt",
+    "hpo_terms": ["HP:0001250", "HP:0001263"],
+    "causal_variant_id": "SYNTH-CAUSAL-001",
+    "causal_gene": "SYN_CAUSAL",
+    "expected_model": "homozygous_recessive"
+  },
+  "compound-het": {
+    "vcf": "compound_het.vcf.txt",
+    "hpo_terms": ["HP:0001250", "HP:0001263"],
+    "causal_variant_id": "SYNTH-CAUSAL-001",
+    "causal_gene": "SYN_CAUSAL",
+    "expected_model": "compound_heterozygous"
+  },
+  "x-linked": {
+    "vcf": "x_linked.vcf.txt",
+    "hpo_terms": ["HP:0001250", "HP:0001263"],
+    "causal_variant_id": "SYNTH-CAUSAL-001",
+    "causal_gene": "SYN_CAUSAL",
+    "expected_model": "x_linked"
+  },
+  "phenotype-incomplete": {
+    "vcf": "phenotype_incomplete.vcf.txt",
+    "hpo_terms": ["HP:0001250"],
+    "causal_variant_id": "SYNTH-CAUSAL-001",
+    "causal_gene": "SYN_CAUSAL",
+    "expected_model": "de_novo"
+  },
+  "novel-gene": {
+    "vcf": "novel_gene.vcf.txt",
+    "hpo_terms": ["HP:0001250", "HP:0001263"],
+    "causal_variant_id": "SYN-NOVEL-001",
+    "causal_gene": "SYN_NOVEL",
+    "expected_model": "de_novo"
+  }
+}

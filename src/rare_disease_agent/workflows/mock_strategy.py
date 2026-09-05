@@ -112,3 +112,119 @@ def default_mock_decisions() -> list[AgentDecision]:
             risk_of_false_negative="low",
         ),
     ]
+
+
+def phase3_mock_decisions() -> list[AgentDecision]:
+    """Safe evidence-first synthetic plan without hard-coded phenotype associations."""
+
+    common = {
+        "risk_of_false_negative": "low",
+        "expected_effect": "Gather deterministic evidence without changing source candidates.",
+    }
+    return [
+        AgentDecision(
+            action="inspect_statistics",
+            rationale="Inspect aggregate variant annotations before selecting branches.",
+            parameters={"branch": "all"},
+            **common,
+        ),
+        AgentDecision(
+            action="get_patient_hpo_summary",
+            rationale="Validate and normalize the supplied HPO identifiers before scoring.",
+            parameters={},
+            **common,
+        ),
+        AgentDecision(
+            action="rank_genes_by_phenotype",
+            rationale="Inspect deterministic ontology-aware gene phenotype evidence.",
+            parameters={"branch": "all", "limit": 10},
+            **common,
+        ),
+        AgentDecision(
+            action="evaluate_inheritance",
+            rationale="Inspect inheritance hypotheses using only pedigree genotype evidence.",
+            parameters={"branch": "all"},
+            **common,
+        ),
+        AgentDecision(
+            action="create_rescue_branch",
+            rationale="Keep a reversible conservative branch before rarity filtering.",
+            parameters={"source_branch": "all", "target_branch": "conservative"},
+            **common,
+        ),
+        AgentDecision(
+            action="filter_frequency",
+            rationale=(
+                "Create a rare branch while rescuing missing frequency and pathogenic records."
+            ),
+            parameters={
+                "source_branch": "conservative",
+                "target_branch": "conservative_rare",
+                "maximum_allele_frequency": 0.01,
+                "preserve_pathogenic_clinvar": True,
+            },
+            expected_effect="Prioritize rare candidates without deleting the conservative source.",
+            risk_of_false_negative="medium",
+        ),
+        AgentDecision(
+            action="create_rescue_branch",
+            rationale="Keep an independent branch for molecular consequence evidence.",
+            parameters={"source_branch": "all", "target_branch": "pathogenicity"},
+            **common,
+        ),
+        AgentDecision(
+            action="filter_consequence",
+            rationale="Create a high-impact branch without treating consequence as proof.",
+            parameters={
+                "source_branch": "pathogenicity",
+                "target_branch": "pathogenicity-priority",
+                "allowed_consequences": [
+                    "frameshift_variant",
+                    "missense_variant",
+                    "splice_acceptor_variant",
+                    "splice_donor_variant",
+                    "stop_gained",
+                ],
+            },
+            expected_effect="Create a reversible molecular-impact priority branch.",
+            risk_of_false_negative="medium",
+        ),
+        AgentDecision(
+            action="create_evidence_branches",
+            rationale=(
+                "Use evaluated evidence to create phenotype and inheritance priorities plus a "
+                "non-destructive novel-gene rescue."
+            ),
+            parameters={
+                "branch": "all",
+                "phenotype_branch": "phenotype-priority",
+                "inheritance_branch": "inheritance-priority",
+                "novel_gene_branch": "novel-gene-rescue",
+            },
+            expected_effect="Create three reversible evidence branches from the full source.",
+            risk_of_false_negative="low",
+        ),
+        AgentDecision(
+            action="merge_branches",
+            rationale="Union independent evidence and rescue strategies before ranking.",
+            parameters={
+                "branches": [
+                    "conservative_rare",
+                    "phenotype-priority",
+                    "inheritance-priority",
+                    "pathogenicity-priority",
+                    "novel-gene-rescue",
+                ],
+                "target_branch": "ensemble",
+            },
+            expected_effect="Create the final inclusive candidate ensemble.",
+            risk_of_false_negative="low",
+        ),
+        AgentDecision(
+            action="stop",
+            rationale="Proceed to deterministic ranking; further hard filtering is unjustified.",
+            parameters={"branch": "ensemble", "reason": "evidence_ready_for_ranking"},
+            expected_effect="Stop agent filtering and hand candidates to deterministic ranking.",
+            risk_of_false_negative="low",
+        ),
+    ]

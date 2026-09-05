@@ -70,7 +70,7 @@ def test_multi_branch_workflow_preserves_causal_variant_and_audits_every_decisio
     lines = [json.loads(line) for line in result.audit_path.read_text().splitlines()]
     decisions = [line for line in lines if line["record_type"] == "agent_decision"]
     assert len(decisions) == 9
-    assert all(record["prompt_version"] == "variant-filtering-v1" for record in decisions)
+    assert all(record["prompt_version"] == "variant-filtering-v2" for record in decisions)
     assert all(len(record["prompt_hash"]) == 64 for record in decisions)
     assert result.metrics_path.is_file()
     assert result.candidates_path.is_file()

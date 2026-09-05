@@ -35,7 +35,17 @@ class VariantFilteringAgent:
             "current_branch": state.current_branch,
             "current_variant_count": state.current_variant_count,
             "phenotype_available": state.phenotype_available,
+            "phenotype_evaluated": state.phenotype_evaluated,
+            "patient_hpo_count": state.patient_hpo_count,
+            "top_phenotype_genes": [
+                item.model_dump(mode="json") for item in state.top_phenotype_genes
+            ],
+            "pedigree_available": state.pedigree_available,
             "inheritance_available": state.inheritance_available,
+            "inheritance_evaluated": state.inheritance_evaluated,
+            "inheritance_summary": [
+                item.model_dump(mode="json") for item in state.inheritance_summary
+            ],
             "candidate_sets": [summary.model_dump(mode="json") for summary in state.candidate_sets],
             "last_observation": (
                 state.last_observation.model_dump(mode="json") if state.last_observation else None

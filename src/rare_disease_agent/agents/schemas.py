@@ -8,6 +8,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from rare_disease_agent.tools.inheritance.schemas import InheritanceSummary
+from rare_disease_agent.tools.phenotype.schemas import GenePhenotypeSummary
+
 AgentAction = Literal[
     "inspect_statistics",
     "count_variants",
@@ -18,6 +21,10 @@ AgentAction = Literal[
     "filter_gene",
     "filter_clinvar",
     "create_rescue_branch",
+    "get_patient_hpo_summary",
+    "rank_genes_by_phenotype",
+    "evaluate_inheritance",
+    "create_evidence_branches",
     "merge_branches",
     "stop",
 ]
@@ -73,6 +80,38 @@ class CreateRescueBranchParameters(FilterBranchParameters):
     pass
 
 
+class GetPatientHPOSummaryParameters(ToolParameters):
+    pass
+
+
+class RankGenesByPhenotypeParameters(BranchParameters):
+    limit: int = Field(default=10, ge=1, le=25)
+
+
+class EvaluateInheritanceParameters(BranchParameters):
+    pass
+
+
+class CreateEvidenceBranchesParameters(BranchParameters):
+    phenotype_branch: str = Field(default="phenotype-priority", pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    inheritance_branch: str = Field(
+        default="inheritance-priority", pattern=r"^[A-Za-z0-9_-]{1,64}$"
+    )
+    novel_gene_branch: str = Field(default="novel-gene-rescue", pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
+    @model_validator(mode="after")
+    def branch_names_must_be_distinct(self) -> CreateEvidenceBranchesParameters:
+        names = {
+            self.branch,
+            self.phenotype_branch,
+            self.inheritance_branch,
+            self.novel_gene_branch,
+        }
+        if len(names) != 4:
+            raise ValueError("Evidence branch names and source branch must be distinct")
+        return self
+
+
 class MergeBranchesParameters(ToolParameters):
     branches: list[str] = Field(min_length=2, max_length=20)
     target_branch: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
@@ -98,6 +137,10 @@ ACTION_PARAMETER_MODELS: dict[str, type[ToolParameters]] = {
     "filter_gene": FilterGeneParameters,
     "filter_clinvar": FilterClinvarParameters,
     "create_rescue_branch": CreateRescueBranchParameters,
+    "get_patient_hpo_summary": GetPatientHPOSummaryParameters,
+    "rank_genes_by_phenotype": RankGenesByPhenotypeParameters,
+    "evaluate_inheritance": EvaluateInheritanceParameters,
+    "create_evidence_branches": CreateEvidenceBranchesParameters,
     "merge_branches": MergeBranchesParameters,
     "stop": StopParameters,
 }
@@ -130,6 +173,7 @@ class AgentDecision(BaseModel):
             "filter_consequence",
             "filter_gene",
             "filter_clinvar",
+            "create_evidence_branches",
             "merge_branches",
         }:
             parameters.pop("target_branch", None)
@@ -184,6 +228,7 @@ class FilterDecisionRecord(BaseModel):
     prompt_hash: str
     outcome: AuditOutcome
     feedback: str
+    observation_data: dict[str, Any] = Field(default_factory=dict)
 
 
 class VariantFilteringState(BaseModel):
@@ -193,7 +238,14 @@ class VariantFilteringState(BaseModel):
     initial_variant_count: int = Field(ge=0)
     current_variant_count: int = Field(ge=0)
     phenotype_available: bool = False
+    phenotype_evaluated: bool = False
+    patient_hpo_count: int = Field(default=0, ge=0)
+    top_phenotype_genes: list[GenePhenotypeSummary] = Field(default_factory=list, max_length=25)
+    pedigree_available: bool = False
     inheritance_available: bool = False
+    inheritance_evaluated: bool = False
+    inheritance_summary: list[InheritanceSummary] = Field(default_factory=list, max_length=10)
+    causal_variant_rank: int | None = Field(default=None, ge=1)
     iteration: int = Field(default=0, ge=0)
     max_iterations: int = Field(default=10, ge=1)
     max_tool_calls: int = Field(default=20, ge=1)
