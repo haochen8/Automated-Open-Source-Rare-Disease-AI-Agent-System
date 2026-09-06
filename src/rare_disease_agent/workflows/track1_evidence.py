@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import json
 from importlib.resources import as_file
 from pathlib import Path
 
@@ -12,12 +13,14 @@ from pydantic import BaseModel, ConfigDict
 from rare_disease_agent.agents.variant_agent import VariantFilteringAgent
 from rare_disease_agent.config import Settings
 from rare_disease_agent.llm.base import LLMBackend
+from rare_disease_agent.ranking.persistent import rank_persistent, ranking_rows
 from rare_disease_agent.ranking.schemas import (
+    AblationResult,
     PhenotypeAblationResult,
     RankedVariant,
     Track1Metrics,
 )
-from rare_disease_agent.ranking.scoring import PreliminaryRanker
+from rare_disease_agent.ranking.scoring import MODE_FEATURES, PreliminaryRanker
 from rare_disease_agent.reporting.audit import AuditWriter
 from rare_disease_agent.reporting.provenance import RunProvenance, software_identity
 from rare_disease_agent.storage.parquet import write_variants_parquet
@@ -59,8 +62,10 @@ class Track1EvidenceWorkflow:
         settings: Settings,
         run_directory: Path | str,
         run_id: str,
+        phenotype_store=None,
     ) -> None:
         self.case = load_synthetic_case(case_name)
+        self.phenotype_store = phenotype_store
         self.backend = backend
         self.settings = settings
         self.run_directory = Path(run_directory)
@@ -75,7 +80,7 @@ class Track1EvidenceWorkflow:
         with as_file(self.case.vcf_resource) as vcf_path:
             write_variants_parquet(parse_vcf(vcf_path), parquet_path)
 
-        store = load_synthetic_phenotype_store()
+        store = self.phenotype_store or load_synthetic_phenotype_store()
         run_provenance = RunProvenance(
             software=software,
             hpo_data_version=store.data_version,
@@ -121,28 +126,29 @@ class Track1EvidenceWorkflow:
             causal_variant_id=self.case.causal_variant_id,
             toolbox=toolbox,
         ).run()
-        rows = toolbox.candidate_rows(filtering.state.current_branch)
         weights = self.settings.track1.preliminary_scoring.model_dump()
         ranker = PreliminaryRanker(weights=weights, run_id=self.run_id, software=software)
-        ablations, rankings = ranker.ablations(
-            rows,
-            phenotype_scores=toolbox.phenotype_scores,
-            inheritance_scores=toolbox.inheritance_scores,
-            causal_variant_id=self.case.causal_variant_id,
+        rank_persistent(toolbox, ranker, filtering.state.current_branch)
+        connection = toolbox.membership._connection
+        ablations = []
+        for mode in MODE_FEATURES:
+            row = connection.execute(
+                "SELECT rank FROM ranked_evidence WHERE run_id=? AND mode=? AND variant_id=?",
+                [self.run_id, mode, self.case.causal_variant_id],
+            ).fetchone()
+            rank = row[0] if row else None
+            ablations.append(
+                AblationResult(
+                    mode=mode,
+                    causal_variant_rank=rank,
+                    top_1=rank == 1,
+                    top_5=rank is not None and rank <= 5,
+                    top_10=rank is not None and rank <= 10,
+                )
+            )
+        ranked = list(
+            ranking_rows(connection, self.run_id, "filtering_phenotype_inheritance", limit=100)
         )
-        ranked = rankings["filtering_phenotype_inheritance"]
-        score_rows = [
-            {
-                "variant_id": item.variant_id,
-                "mode": item.mode,
-                "rank": item.rank,
-                "raw_score": item.raw_score,
-                "features": item.features.model_dump(mode="json"),
-            }
-            for values in rankings.values()
-            for item in values
-        ]
-        toolbox.membership.write_scores(score_rows)
 
         partial_terms = self.case.hpo_terms[:-1]
         partial_phenotype = PhenotypeToolbox(
@@ -151,24 +157,27 @@ class Track1EvidenceWorkflow:
             run_id=self.run_id,
             software=software,
         )
-        genes = sorted({str(row.get("gene") or "").upper() for row in rows})
-        partial_scores = {
-            gene: partial_phenotype.get_gene_phenotype_score(gene).score for gene in genes
-        }
-        partial_ranked = ranker.rank(
-            rows,
-            phenotype_scores=partial_scores,
-            inheritance_scores=toolbox.inheritance_scores,
+        rank_persistent(
+            toolbox,
+            ranker,
+            filtering.state.current_branch,
+            prefix="partial_",
+            phenotype_override=partial_phenotype,
         )
-        full_causal = next(
-            (item for item in ranked if item.variant_id == self.case.causal_variant_id), None
-        )
-        partial_causal = next(
-            (item for item in partial_ranked if item.variant_id == self.case.causal_variant_id),
-            None,
-        )
+
+        def causal_result(mode):
+            # Causal lookup is evaluation-only and does not influence ranking.
+            for item in ranking_rows(connection, self.run_id, mode):
+                if item.variant_id == self.case.causal_variant_id:
+                    return item
+            return None
+
+        full_causal = causal_result("filtering_phenotype_inheritance")
+        partial_causal = causal_result("partial_filtering_phenotype_inheritance")
         full_phenotype_score = toolbox.phenotype_scores.get(self.case.causal_gene, 0)
-        partial_phenotype_score = partial_scores.get(self.case.causal_gene, 0)
+        partial_phenotype_score = partial_phenotype.get_gene_phenotype_score(
+            self.case.causal_gene
+        ).score
         phenotype_ablation = PhenotypeAblationResult(
             removed_hpo_term=self.case.hpo_terms[-1] if len(self.case.hpo_terms) > 1 else None,
             full_phenotype_causal_rank=full_causal.rank if full_causal else None,
@@ -181,15 +190,18 @@ class Track1EvidenceWorkflow:
         filtering.state.causal_variant_rank = causal_rank
         filtering.metrics.causal_variant_rank = causal_rank
         audit.write_metrics(filtering.metrics)
-        novel_rescue_ids = (
-            toolbox.candidate_ids("novel-gene-rescue")
+        novel_rescue_count = (
+            toolbox.membership.count("novel-gene-rescue")
             if toolbox.membership.has_branch("novel-gene-rescue")
-            else []
+            else 0
         )
+        from rare_disease_agent.tools.inheritance.schemas import InheritanceEvidence
+
         causal_inheritance = [
-            item
-            for item in toolbox.inheritance_evaluation.evidence
-            if item.variant_id == self.case.causal_variant_id
+            InheritanceEvidence.model_validate(item)
+            for item in toolbox.evidence_store.payloads(
+                phenotype=False, variant_id=self.case.causal_variant_id
+            )
         ]
         true_model_identified = any(
             item.model == self.case.expected_model and item.fit >= 0.8
@@ -205,20 +217,19 @@ class Track1EvidenceWorkflow:
         uncertain_models = sorted(
             {item.model for item in causal_inheritance if 0.4 <= item.fit < 0.8}
         )
-        toolbox.membership.close()
         gc.collect()
         rss_end = process.memory_info().rss / (1024**2)
         metrics = Track1Metrics(
             run_id=self.run_id,
             case=self.case.name,
             initial_candidates=filtering.metrics.initial_candidates,
-            final_candidates=len(ranked),
+            final_candidates=toolbox.membership.count(filtering.state.current_branch),
             causal_variant_preserved=full_causal is not None,
             causal_variant_rank=causal_rank,
             top_1=causal_rank == 1,
             top_5=causal_rank is not None and causal_rank <= 5,
             top_10=causal_rank is not None and causal_rank <= 10,
-            novel_gene_rescue_preserved=bool(novel_rescue_ids),
+            novel_gene_rescue_preserved=bool(novel_rescue_count),
             expected_inheritance_model=self.case.expected_model,
             true_inheritance_model_identified=true_model_identified,
             false_positive_inheritance_models=false_positive_models,
@@ -235,7 +246,25 @@ class Track1EvidenceWorkflow:
         evidence_path = self.run_directory / "evidence.json"
         provenance_path = self.run_directory / "provenance.json"
         audit._write_json(metrics_path, metrics)
-        audit._write_json(ranking_path, [item.model_dump(mode="json") for item in ranked])
+
+        def stream_json_array(handle, items):
+            handle.write("[")
+            for index, item in enumerate(items):
+                if index:
+                    handle.write(",")
+                handle.write(json.dumps(item))
+            handle.write("]")
+
+        with ranking_path.open("w") as handle:
+            stream_json_array(
+                handle,
+                (
+                    item.model_dump(mode="json")
+                    for item in ranking_rows(
+                        connection, self.run_id, "filtering_phenotype_inheritance"
+                    )
+                ),
+            )
         audit._write_json(
             ablations_path,
             {
@@ -243,17 +272,28 @@ class Track1EvidenceWorkflow:
                 "phenotype_ablation": phenotype_ablation.model_dump(mode="json"),
             },
         )
-        audit._write_json(
-            evidence_path,
-            {
-                "phenotype": [item.model_dump(mode="json") for item in toolbox.phenotype_evidence],
-                "inheritance": (
-                    toolbox.inheritance_evaluation.model_dump(mode="json")
-                    if toolbox.inheritance_evaluation
-                    else None
-                ),
-            },
-        )
+        toolbox.evidence_store.export(self.run_directory / "evidence.parquet")
+        with evidence_path.open("w") as handle:
+            handle.write('{"phenotype":')
+            stream_json_array(handle, toolbox.evidence_store.payloads(phenotype=True))
+            handle.write(',"inheritance":{"evidence":')
+            stream_json_array(handle, toolbox.evidence_store.payloads(phenotype=False))
+            handle.write(',"compound_heterozygous_pairs":')
+            cursor = connection.cursor()
+            cursor.execute(
+                "SELECT payload FROM compound_pairs WHERE run_id=? ORDER BY variant_a, variant_b",
+                [self.run_id],
+            )
+
+            def pairs():
+                while batch := cursor.fetchmany(256):
+                    for row in batch:
+                        yield json.loads(row[0])
+
+            stream_json_array(handle, pairs())
+            cursor.close()
+            handle.write("}}")
+        toolbox.membership.close()
         audit._write_json(provenance_path, run_provenance)
         audit.write_event(
             "phase3_ranking_completed",

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rare-disease-agent"
-version = "0.3.0"
+version = "0.4.0"
 description = "Local-first, auditable rare-disease variant prioritization research software"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,6 +32,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "hatchling>=1.27,<2",
   "pre-commit>=4,<5",
   "pytest>=8,<10",
   "pytest-cov>=6,<8",

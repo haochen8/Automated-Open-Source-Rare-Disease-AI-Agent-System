@@ -20,7 +20,7 @@ class VCFParseError(ValueError):
 
 
 class VariantRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     chromosome: str
     position: int = Field(gt=0)
@@ -104,7 +104,13 @@ def _genotype_call(format_value: str, sample_value: str) -> dict[str, object]:
         quality = float(quality_raw) if quality_raw not in {None, "", "."} else None
     except ValueError as exc:
         raise VCFParseError(f"Expected numeric genotype quality, got {quality_raw!r}") from exc
-    return {"genotype": fields.get("GT"), "quality": quality}
+    result = {"genotype": fields.get("GT"), "quality": quality}
+    if fields.get("VAF") not in {None, "", "."}:
+        fraction = float(fields["VAF"])
+        if not 0 <= fraction <= 1:
+            raise VCFParseError("Invalid alternate allele fraction")
+        result["alternate_fraction"] = fraction
+    return result
 
 
 def _zygosity(genotype: str | None) -> str | None:
@@ -236,6 +242,8 @@ def parse_vcf(path: Path | str) -> Iterator[VariantRecord]:
                 saw_header = True
                 header_columns = line.split("\t")
                 sample_names = header_columns[9:] if len(header_columns) > 9 else []
+                if len(set(sample_names)) != len(sample_names):
+                    raise VCFParseError("Duplicate sample identities in VCF header")
                 continue
             if line.startswith("#"):
                 continue

@@ -34,12 +34,23 @@ class CandidateMembershipStore:
         else:
             self.database_path = None
             self._connection = duckdb.connect(":memory:")
+        from rare_disease_agent.resource_management import sha256
+
+        tables = {row[0] for row in self._connection.execute("SHOW TABLES").fetchall()}
+        if "run_identity" in tables:
+            existing = self._connection.execute("SELECT * FROM run_identity").fetchall()
+            if existing != [(run_id, sha256(source), 1)]:
+                self._connection.close()
+                raise ValueError("Membership run ID, source checksum or schema version mismatch")
+        self._connection.execute("SET memory_limit='1GB'")
+        self._connection.execute("SET threads=2")
         self.run_id = run_id
         self._connection.from_parquet(str(source.resolve())).create_view("variant_source")
         self._connection.execute(
-            "CREATE TEMP TABLE variants AS "
+            "CREATE TABLE IF NOT EXISTS variants AS "
             "SELECT row_number() OVER () AS _row_id, * FROM variant_source"
         )
+        self._connection.execute("DROP VIEW variant_source")
         duplicate = self._connection.execute(
             "SELECT variant_id FROM variants GROUP BY variant_id HAVING count(*) > 1 LIMIT 1"
         ).fetchone()
@@ -71,20 +82,59 @@ class CandidateMembershipStore:
             )
             """
         )
-        self._connection.execute("DELETE FROM candidate_membership WHERE run_id = ?", [self.run_id])
-        self._connection.execute("DELETE FROM candidate_branches WHERE run_id = ?", [self.run_id])
+        from rare_disease_agent.resource_management import sha256
+
         self._connection.execute(
-            "INSERT INTO candidate_branches VALUES (?, 'all', NULL, 0, 'source', '[]')",
-            [self.run_id],
+            "CREATE TABLE IF NOT EXISTS run_identity (run_id VARCHAR PRIMARY KEY, "
+            "source_hash VARCHAR, schema_version INTEGER)"
         )
-        self._connection.execute(
-            """
-            INSERT INTO candidate_membership
-            SELECT ?, variant_id, 'all', 0, true, 'source'
-            FROM variants
-            """,
-            [self.run_id],
-        )
+        identity = self._connection.execute("SELECT * FROM run_identity").fetchall()
+        expected = (run_id, sha256(source), 1)
+        if identity and identity != [expected]:
+            self._connection.close()
+            raise ValueError("Membership run ID, source checksum or schema version mismatch")
+        if not identity:
+            with self.transaction():
+                self._connection.execute(
+                    "INSERT INTO run_identity VALUES (?, ?, ?)", list(expected)
+                )
+                self._connection.execute(
+                    "INSERT INTO candidate_branches VALUES (?, 'all', NULL, 0, 'source', '[]')",
+                    [run_id],
+                )
+                self._connection.execute(
+                    (
+                        "INSERT INTO candidate_membership SELECT ?, variant_id, 'all', 0, true, "
+                        "'source' FROM variants"
+                    ),
+                    [run_id],
+                )
+        if (
+            self.count("all")
+            != self._connection.execute("SELECT count(*) FROM variants").fetchone()[0]
+        ):
+            raise ValueError("Incomplete source membership")
+
+    def iter_rows(self, branch: str, *, batch_size: int = 256):
+        self._branch_metadata(branch)
+        if not 1 <= batch_size <= 4096:
+            raise ValueError("Invalid row batch size")
+        cursor = self._connection.cursor()
+        try:
+            cursor.execute(
+                (
+                    "SELECT v.* EXCLUDE (_row_id) FROM variants v JOIN candidate_membership m "
+                    "USING (variant_id) WHERE m.run_id=? AND m.branch=? AND m.active ORDER BY "
+                    "v._row_id"
+                ),
+                [self.run_id, branch],
+            )
+            columns = [item[0] for item in cursor.description]
+            while batch := cursor.fetchmany(batch_size):
+                for row in batch:
+                    yield dict(zip(columns, row, strict=True))
+        finally:
+            cursor.close()
 
     def close(self) -> None:
         self._connection.close()

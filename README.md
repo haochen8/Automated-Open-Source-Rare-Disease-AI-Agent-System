@@ -3,9 +3,9 @@
 Local-first research software for the SageBio **Rare Disease, Real Kid: MVA Hackathon
 2026**. The intended system will prioritize candidate variants (Track 1), then develop
 evidence-backed drug-repurposing hypotheses (Track 2). This repository currently contains
-the safe Phase 0–3 foundation: configuration, privacy controls, hardware-aware model advice,
+the Phase 0–4 research foundation: configuration, privacy controls, hardware-aware model advice,
 a deterministic synthetic VCF → Parquet → DuckDB pipeline, bounded autonomous filtering,
-phenotype and inheritance evidence, and preliminary variant ranking.
+phenotype and inheritance evidence, preliminary variant ranking, and reproducible local dry runs.
 
 > **Research use only.** This is not medical advice, a diagnostic system, or a clinical
 > decision-making tool. Any future drug candidates are research hypotheses only.
@@ -157,6 +157,25 @@ release artifacts, but no public dataset is downloaded automatically. HPO publis
 through the [official OBO PURL](http://purl.obolibrary.org/obo/hp.obo) and versioned
 [release assets](https://github.com/obophenotype/human-phenotype-ontology/releases).
 
+## Phase 4 reproducible dry runs
+
+```bash
+rare-disease-agent resources
+rare-disease-agent track1-dry-run --case missing-parent --output-dir /tmp/track1-research
+rare-disease-agent benchmark-phase4 --output-dir /tmp/phase4-benchmark --seed 17
+```
+
+Phase 4 adds explicit checksum-pinned public resources, official-shaped HPO normalization,
+patient-scale persistent evidence, genomic preflight, previewable annotation adapters, a bounded
+critic, redacted local reports and restartable stages. Automated execution remains offline and
+mock-only. The seven additional synthetic cases cover incomplete penetrance, affected siblings,
+missing parents, female X-chromosome uncertainty, unphased compound heterozygosity, low alternate
+allele fraction and missing annotations. No public release, real patient data or annotation cache
+was downloaded during development.
+
+See [resource lifecycle](docs/resources.md), [local operations and authorized-data scope](docs/operations.md),
+and [Phase 4 results and limits](docs/phase4.md). Reports are research artifacts, not clinical outputs.
+
 ## Configuration
 
 - `configs/default.yaml`: validated runtime defaults
@@ -184,11 +203,10 @@ independent barrier.
 ## Reproducibility and current limits
 
 The normalized schema captures variant, genotype, annotation, phenotype, and evidence fields.
-Phase 3 does not annotate production VCFs, use real patient phenotypes, query literature, enrich
+Phase 4 does not automatically annotate production VCFs, use real patient phenotypes, query literature, enrich
 ClinVar/VEP, generate official submissions, or implement Track 2. The preliminary score weights are
 benchmarkable defaults, not claims of clinical optimality. See [model selection](docs/model_selection.md),
-[Phase 2](docs/phase2.md), [Phase 3](docs/phase3.md), and the recommended
-[Phase 4 plan](docs/phase4.md).
+[Phase 2](docs/phase2.md), [Phase 3](docs/phase3.md), and [Phase 4](docs/phase4.md).
 
 ## License
 

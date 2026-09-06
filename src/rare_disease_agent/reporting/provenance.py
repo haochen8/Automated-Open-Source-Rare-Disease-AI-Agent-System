@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import platform
 import subprocess
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import distributions
 from pathlib import Path
 from typing import Any
 
@@ -60,12 +60,13 @@ def software_identity(repository: Path | str = Path(".")) -> SoftwareIdentity:
 
     commit = git("rev-parse", "HEAD") or "unknown"
     status = git("status", "--porcelain")
-    dependencies: dict[str, str] = {}
-    for package in ("duckdb", "httpx", "langgraph", "pydantic", "pyarrow", "psutil"):
-        try:
-            dependencies[package] = version(package)
-        except PackageNotFoundError:
-            dependencies[package] = "not-installed"
+    dependencies = dict(
+        sorted(
+            (distribution.metadata["Name"], distribution.version)
+            for distribution in distributions()
+            if distribution.metadata["Name"]
+        )
+    )
     return SoftwareIdentity(
         git_commit=commit,
         git_dirty=status not in {"", "unknown"},

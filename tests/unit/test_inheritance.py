@@ -143,3 +143,26 @@ def test_autosomal_recessive_summary_includes_compound_het_evidence() -> None:
 
     recessive = [item for item in result.evidence if item.model == "autosomal_recessive"]
     assert all(item.fit == 0.95 for item in recessive)
+
+
+def test_same_parent_origin_does_not_support_confirmed_trans():
+    evaluator = InheritanceEvaluator(synthetic_pedigree(), run_id="same-origin")
+    pair = evaluator.find_compound_heterozygous_pairs(
+        [
+            variant(variant_id="first", mother="0/1", father="0/0"),
+            variant(variant_id="second", mother="0/1", father="0/0"),
+        ]
+    )[0]
+    assert pair.phase == "unknown"
+    assert pair.confidence < 0.4
+
+
+def test_deep_pedigree_validation_is_iterative_and_rejects_cycles():
+    people = [
+        Individual(id=f"person{i}", mother_id=f"person{i + 1}" if i < 999 else None)
+        for i in range(1000)
+    ]
+    assert len(Pedigree(proband_id="person0", individuals=people).individuals) == 1000
+    people[-1].mother_id = "person0"
+    with pytest.raises(ValueError, match="cycle"):
+        Pedigree(proband_id="person0", individuals=people)

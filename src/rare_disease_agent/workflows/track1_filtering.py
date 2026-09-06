@@ -339,9 +339,16 @@ class VariantFilteringWorkflow:
         return builder.compile()
 
     def run(self) -> FilteringRunResult:
+        import os
+
+        if any(
+            os.environ.get(name, "").lower() in {"true", "1"}
+            for name in ("LANGSMITH_TRACING", "LANGCHAIN_TRACING_V2")
+        ):
+            raise RuntimeError("External tracing must be disabled for local research workflows")
         process = psutil.Process()
         rss_start = process.memory_info().rss / (1024**2)
-        initial_count = len(self.toolbox.candidate_ids("all"))
+        initial_count = self.toolbox.membership.count("all")
         initial_state = VariantFilteringState(
             run_id=self.run_id,
             initial_variant_count=initial_count,
@@ -360,16 +367,27 @@ class VariantFilteringWorkflow:
             config={"recursion_limit": self.config.max_iterations * 3 + 10},
         )
         state = _validated_state(raw_result)
-        final_ids = self.toolbox.candidate_ids(state.current_branch)
+        from itertools import islice
+
+        final_count = self.toolbox.membership.count(state.current_branch)
+        final_ids = [
+            row["variant_id"]
+            for row in islice(self.toolbox.membership.iter_rows(state.current_branch), 100)
+        ]
         causal_preserved = (
-            self.causal_variant_id in final_ids if self.causal_variant_id is not None else None
+            any(
+                row["variant_id"] == self.causal_variant_id
+                for row in self.toolbox.membership.iter_rows(state.current_branch)
+            )
+            if self.causal_variant_id is not None
+            else None
         )
         rss_end = process.memory_info().rss / (1024**2)
-        ratio = len(final_ids) / initial_count if initial_count else 0
+        ratio = final_count / initial_count if initial_count else 0
         metrics = FilteringMetrics(
             run_id=self.run_id,
             initial_candidates=initial_count,
-            final_candidates=len(final_ids),
+            final_candidates=final_count,
             iterations=state.iteration,
             tool_calls=state.tool_calls,
             causal_variant_preserved=causal_preserved,
@@ -380,7 +398,15 @@ class VariantFilteringWorkflow:
             process_rss_mb_end=round(rss_end, 2),
         )
         self.audit.write_metrics(metrics)
-        self.audit.write_candidates(final_ids)
+        import json
+
+        with self.audit.candidates_path.open("w") as output:
+            output.write('{"candidate_variant_ids":[')
+            for index, row in enumerate(self.toolbox.membership.iter_rows(state.current_branch)):
+                if index:
+                    output.write(",")
+                output.write(json.dumps(row["variant_id"]))
+            output.write("]}")
         self.audit.write_event(
             "workflow_completed",
             run_id=self.run_id,

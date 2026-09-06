@@ -20,7 +20,7 @@ InheritanceModel = Literal[
 
 
 class Individual(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
     sex: Literal["female", "male", "unknown"] = "unknown"
@@ -30,7 +30,7 @@ class Individual(BaseModel):
 
 
 class Pedigree(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     proband_id: str
     mother_id: str | None = None
@@ -56,6 +56,31 @@ class Pedigree(BaseModel):
                     raise ValueError("Individual parent identifiers must identify individuals")
                 if parent == individual.id:
                     raise ValueError("An individual cannot be their own parent")
+        if self.mother_id is not None and self.mother_id == self.father_id:
+            raise ValueError("Parents must be distinct")
+        edges = {
+            person.id: [p for p in (person.mother_id, person.father_id) if p]
+            for person in self.individuals
+        }
+        edges[self.proband_id] = list(
+            set(edges[self.proband_id] + [p for p in (self.mother_id, self.father_id) if p])
+        )
+
+        colors = {}
+        for root in edges:
+            pending = [(root, False)]
+            while pending:
+                node, leaving = pending.pop()
+                if leaving:
+                    colors[node] = 2
+                    continue
+                if colors.get(node) == 2:
+                    continue
+                if colors.get(node) == 1:
+                    raise ValueError("Pedigree ancestry cycle")
+                colors[node] = 1
+                pending.append((node, True))
+                pending.extend((parent, False) for parent in edges[node])
         return self
 
     def individual(self, individual_id: str) -> Individual | None:
@@ -63,11 +88,12 @@ class Pedigree(BaseModel):
 
 
 class GenotypeCall(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     individual_id: str
     genotype: str | None = None
     quality: float | None = Field(default=None, ge=0)
+    alternate_fraction: float | None = Field(default=None, ge=0, le=1)
 
     @model_validator(mode="after")
     def validate_genotype(self) -> GenotypeCall:
@@ -110,7 +136,7 @@ class GenotypeCall(BaseModel):
 
 
 class VariantGenotypes(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     variant_id: str
     gene: str
@@ -131,7 +157,7 @@ class VariantGenotypes(BaseModel):
 
 
 class InheritanceEvidence(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     variant_id: str
     gene: str
@@ -147,7 +173,7 @@ class InheritanceEvidence(BaseModel):
 
 
 class CompoundHeterozygousPair(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     gene: str
     variant_a: str
@@ -160,7 +186,7 @@ class CompoundHeterozygousPair(BaseModel):
 
 
 class InheritanceSummary(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     model: InheritanceModel
     strong_matches: int = Field(ge=0)
@@ -169,7 +195,7 @@ class InheritanceSummary(BaseModel):
 
 
 class InheritanceEvaluation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     evidence: list[InheritanceEvidence]
     compound_heterozygous_pairs: list[CompoundHeterozygousPair]

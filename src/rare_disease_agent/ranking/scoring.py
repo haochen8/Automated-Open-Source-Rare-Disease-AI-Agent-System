@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from rare_disease_agent.ranking.schemas import (
@@ -53,7 +54,9 @@ class PreliminaryRanker:
         software: SoftwareIdentity | None = None,
     ) -> None:
         required = {"quality", "rarity", "consequence", "phenotype", "inheritance"}
-        if set(weights) != required or any(value < 0 for value in weights.values()):
+        if set(weights) != required or any(
+            not math.isfinite(value) or value < 0 for value in weights.values()
+        ):
             raise ValueError(f"Ranking weights must be non-negative and define {sorted(required)}")
         if sum(weights.values()) <= 0:
             raise ValueError("At least one ranking weight must be positive")

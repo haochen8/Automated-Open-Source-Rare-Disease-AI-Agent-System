@@ -2,7 +2,7 @@
 
 ## Scope
 
-Phases 0–3 create the repository foundation, a normalized VCF → Parquet → DuckDB flow, a bounded
+Phases 0–4 provide the repository foundation, a normalized VCF → Parquet → DuckDB flow, a bounded
 agent-controlled filtering workflow, and deterministic phenotype/inheritance ranking proven with
 synthetic data. Track 2 remains deferred.
 
@@ -85,10 +85,29 @@ inheritance-priority, pathogenicity-priority, and novel-gene-rescue branches bef
 The rescue branch ensures absence of a known HPO association is never treated as exclusion evidence.
 Per-ablation ranking features and ranks are also persisted in DuckDB.
 
-The current synthetic implementation materializes small evidence result lists while calculating
-features. Before genome-scale real-data execution, those complete phenotype/inheritance evidence
-tables should be streamed into DuckDB/Parquet as well; the graph-state and membership boundaries do
-not need to change.
+## Phase 4 persistent runtime and recovery
+
+Phenotype and inheritance operations now write typed evidence in batches into indexed DuckDB,
+keyed by run, variant/gene, method and data version. Mixed versions are rejected. Each evidence
+operation is transactional; interrupted generators roll back all batches. Resnik information
+content counts genes without keeping complete gene-to-score dictionaries. SQL joins drive evidence
+branches and rank features; deterministic ordering uses score then variant identifier. Complete
+artifacts are streamed, with only bounded summaries retained in graph state and return values.
+
+The critic has only typed read-only re-inspection requests, capped at two. It checks required
+evidence, provenance, rescue survival, competing models and uncertainty language. It cannot change
+scores, branches or planner budgets. The local report projects allow-listed fields and replaces
+candidate identities with salted pseudonyms; the complete evidence stays separately inspectable.
+
+A versioned stage journal owns restart identity and immutable stage events. A filesystem lock
+serializes runs. Checksummed stage publication avoids partial results, while failed uncommitted
+stages are recomputed. Self-contained persisted variant tables survive staging-directory renames.
+Committed source membership and audit events are never reset during resume.
+
+Public downloads use a separate explicit lock/receipt lifecycle. Official-shaped HPO inputs are
+normalized offline into typed Parquet and indexed tables, with licenses and source/output hashes.
+Authorized patient rehearsal requires exact input/output scope outside Git and fail-closed preflight;
+annotation preparation remains a separately authorized established-tool operation.
 
 ## Privacy defense in depth
 

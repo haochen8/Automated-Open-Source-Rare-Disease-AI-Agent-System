@@ -70,6 +70,14 @@ class PhenotypeAssociationStore:
     def disease_associations(self, disease_id: str) -> list[GeneAssociation]:
         return list(self._by_disease.get(disease_id, []))
 
+    @property
+    def gene_count(self):
+        return len(self._by_gene)
+
+    def iter_gene_terms(self):
+        for gene, associations in self._by_gene.items():
+            yield gene, {association.hpo_id for association in associations}
+
     def all_gene_terms(self) -> dict[str, set[str]]:
         return {
             gene: {association.hpo_id for association in associations}

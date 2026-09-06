@@ -59,6 +59,16 @@ class InheritanceEvaluator:
             for call in observed
             if call.quality is not None and call.quality < self.minimum_genotype_quality
         ]
+        low_fraction = any(
+            call.alternate_fraction is not None
+            and call.has_alternate
+            and call.alternate_fraction < 0.25
+            for call in observed
+        )
+        if low_fraction:
+            return False, [
+                "Low alternate allele fraction; mosaicism or technical artifact remains uncertain."
+            ]
         if low:
             return False, ["Low genotype quality for: " + ", ".join(sorted(low)) + "."]
         return True, []
@@ -141,6 +151,11 @@ class InheritanceEvaluator:
             evidence.append(
                 f"{consistent} of {informative} phenotype-informative calls fit dominance."
             )
+            if consistent < informative:
+                warnings.append(
+                    "Segregation is incomplete; incomplete penetrance or a competing cause "
+                    "remains possible."
+                )
             if informative < 2:
                 warnings.append("Dominant segregation evidence is sparse.")
         return self._result(
@@ -247,6 +262,12 @@ class InheritanceEvaluator:
                                 "Opposite parental origins were observed, but low genotype quality "
                                 "prevents confirmed-trans classification."
                             )
+                    elif first_origin == second_origin and first_origin in {"maternal", "paternal"}:
+                        phase = "unknown"
+                        confidence = 0.25
+                        warnings.append(
+                            "Same parental origin may indicate cis; trans is unconfirmed."
+                        )
                     elif first_origin in {"maternal", "paternal"} or second_origin in {
                         "maternal",
                         "paternal",

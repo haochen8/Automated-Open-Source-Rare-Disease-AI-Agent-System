@@ -26,17 +26,16 @@ class PhenotypeScorer:
         self._maximum_ic = max(self._information_content.values(), default=1.0) or 1.0
 
     def _build_information_content(self) -> dict[str, float]:
-        gene_terms = self.store.all_gene_terms()
-        total_genes = max(1, len(gene_terms))
-        annotated_genes: dict[str, set[str]] = {}
-        for gene, terms in gene_terms.items():
+        total_genes = max(1, self.store.gene_count)
+        annotated_genes: dict[str, int] = {}
+        for _gene, terms in self.store.iter_gene_terms():
             expanded: set[str] = set()
             for term in terms:
                 expanded.update(self.store.ontology.ancestors(term))
             for term in expanded:
-                annotated_genes.setdefault(term, set()).add(gene)
+                annotated_genes[term] = annotated_genes.get(term, 0) + 1
         return {
-            term: -math.log((len(genes) + 1) / (total_genes + 1))
+            term: -math.log((genes + 1) / (total_genes + 1))
             for term, genes in annotated_genes.items()
         }
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections import Counter
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,7 @@ from rare_disease_agent.agents.schemas import (
     StopParameters,
     ToolObservation,
 )
+from rare_disease_agent.storage.evidence import EvidenceStore
 from rare_disease_agent.storage.membership import CandidateMembershipStore
 from rare_disease_agent.tools.inheritance.evaluator import InheritanceEvaluator
 from rare_disease_agent.tools.inheritance.schemas import GenotypeCall, VariantGenotypes
@@ -57,10 +58,9 @@ class VariantToolbox:
         self.inheritance_evaluator = inheritance_evaluator
         self.phenotype_priority_threshold = phenotype_priority_threshold
         self.inheritance_priority_threshold = inheritance_priority_threshold
-        self.phenotype_scores: dict[str, float] = {}
-        self.phenotype_evidence = []
-        self.inheritance_scores: dict[str, float] = {}
-        self.inheritance_evaluation = None
+        self.evidence_store = EvidenceStore(self.membership._connection, run_id)
+        self.phenotype_scores = self.evidence_store.score_mapping(True)
+        self.inheritance_scores = self.evidence_store.score_mapping(False)
 
     @property
     def patient_hpo_count(self) -> int:
@@ -109,29 +109,33 @@ class VariantToolbox:
         )
 
     def get_variant_statistics(self, parameters: BranchParameters) -> ToolObservation:
-        rows = self.candidate_rows(parameters.branch)
-        qualities = [float(row["quality"]) for row in rows if row["quality"] is not None]
-        frequencies = [
-            float(row["allele_frequency"]) for row in rows if row["allele_frequency"] is not None
-        ]
-        consequence_counts = Counter(str(row["consequence"] or "missing") for row in rows)
-        clinvar_counts = Counter(str(row["clinvar_classification"] or "missing") for row in rows)
-        data = {
-            "count": len(rows),
-            "quality": {
-                "missing": sum(row["quality"] is None for row in rows),
-                "minimum": min(qualities) if qualities else None,
-                "maximum": max(qualities) if qualities else None,
-            },
-            "population_frequency": {
-                "missing": sum(row["allele_frequency"] is None for row in rows),
-                "minimum": min(frequencies) if frequencies else None,
-                "maximum": max(frequencies) if frequencies else None,
-            },
-            "consequences": dict(sorted(consequence_counts.items())),
-            "clinvar": dict(sorted(clinvar_counts.items())),
-        }
-        count = len(rows)
+        count = self._require_branch(parameters.branch)
+        connection = self.membership._connection
+        source = (
+            " FROM variants v JOIN candidate_membership m USING(variant_id) "
+            "WHERE m.run_id=? AND m.branch=? AND m.active"
+        )
+        arguments = [self.membership.run_id, parameters.branch]
+        data = {"count": count}
+        for column, label in (("quality", "quality"), ("allele_frequency", "population_frequency")):
+            missing, minimum, maximum = connection.execute(
+                f"SELECT count(*) FILTER(WHERE {column} IS NULL), min({column}), max({column})"
+                + source,
+                arguments,
+            ).fetchone()
+            data[label] = {"missing": missing, "minimum": minimum, "maximum": maximum}
+        for column, label in (
+            ("consequence", "consequences"),
+            ("clinvar_classification", "clinvar"),
+        ):
+            data[label] = dict(
+                connection.execute(
+                    f"SELECT coalesce({column},'missing') AS category, count(*) AS n"
+                    + source
+                    + " GROUP BY category ORDER BY n DESC, category LIMIT 30",
+                    arguments,
+                ).fetchall()
+            )
         return ToolObservation(
             action="inspect_statistics",
             branch=parameters.branch,
@@ -142,7 +146,7 @@ class VariantToolbox:
         )
 
     def sample_candidate_summary(self, parameters: SampleCandidatesParameters) -> ToolObservation:
-        rows = self.candidate_rows(parameters.branch)
+        rows = list(islice(self.membership.iter_rows(parameters.branch), parameters.limit))
         samples = [
             {
                 "gene": row["gene"],
@@ -153,7 +157,7 @@ class VariantToolbox:
             }
             for row in rows[: parameters.limit]
         ]
-        count = len(rows)
+        count = self._require_branch(parameters.branch)
         return ToolObservation(
             action="sample_candidates",
             branch=parameters.branch,
@@ -327,24 +331,54 @@ class VariantToolbox:
     ) -> ToolObservation:
         if self.phenotype_toolbox is None:
             raise VariantToolError("No phenotype evidence is available for this run.")
-        rows = self.candidate_rows(parameters.branch)
-        genes = sorted({str(row["gene"]).upper() for row in rows if row.get("gene")})
-        scores = [self.phenotype_toolbox.get_gene_phenotype_score(gene) for gene in genes]
-        self.phenotype_evidence = scores
-        self.phenotype_scores = {score.gene: score.score for score in scores}
-        summaries = self.phenotype_toolbox.rank_genes_by_phenotype(genes, limit=parameters.limit)
-        count = len(rows)
+        cursor = self.membership._connection.cursor()
+        try:
+            cursor.execute(
+                (
+                    "SELECT DISTINCT upper(v.gene) FROM variants v JOIN candidate_membership m "
+                    "USING(variant_id) WHERE m.run_id=? AND m.branch=? AND v.gene IS NOT NULL "
+                    "ORDER BY 1"
+                ),
+                [self.membership.run_id, parameters.branch],
+            )
+
+            def scores():
+                while batch := cursor.fetchmany(256):
+                    for row in batch:
+                        yield self.phenotype_toolbox.get_gene_phenotype_score(row[0])
+
+            self.evidence_store.write(scores())
+        finally:
+            cursor.close()
+        top = self.membership._connection.execute(
+            (
+                "SELECT payload FROM evidence WHERE run_id=? AND method='resnik_bma' ORDER "
+                "BY score DESC, gene LIMIT ?"
+            ),
+            [self.membership.run_id, parameters.limit],
+        ).fetchall()
+        scores = [json.loads(row[0]) for row in top]
+        summaries = [
+            {
+                "gene": item["gene"],
+                "score": item["score"],
+                "matched_terms": item["matched_terms"],
+                "association_known": item["association_count"] > 0,
+            }
+            for item in scores
+        ]
+        count = self._require_branch(parameters.branch)
         return ToolObservation(
             action="rank_genes_by_phenotype",
             branch=parameters.branch,
             before_count=count,
             after_count=count,
-            feedback="Ranked genes deterministically using ontology-aware phenotype evidence.",
+            feedback="Persisted complete phenotype evidence; returned bounded top genes.",
             data={
-                "top_genes": [item.model_dump(mode="json") for item in summaries],
+                "top_genes": summaries,
                 "data_version": self.phenotype_toolbox.store.data_version,
                 "method": "resnik_bma",
-                "provenance": (scores[0].provenance.model_dump(mode="json") if scores else None),
+                "provenance": scores[0]["provenance"] if scores else None,
             },
         )
 
@@ -358,6 +392,7 @@ class VariantToolbox:
                     individual_id=individual_id,
                     genotype=value.get("genotype"),
                     quality=value.get("quality"),
+                    alternate_fraction=value.get("alternate_fraction"),
                 )
                 for individual_id, value in parsed.items()
             ]
@@ -378,95 +413,187 @@ class VariantToolbox:
     def evaluate_inheritance(self, parameters: EvaluateInheritanceParameters) -> ToolObservation:
         if self.inheritance_evaluator is None:
             raise VariantToolError("No pedigree evidence is available for this run.")
-        rows = self.candidate_rows(parameters.branch)
-        variants = [self._variant_genotypes(row) for row in rows]
-        evaluation = self.inheritance_evaluator.evaluate(variants)
-        self.inheritance_evaluation = evaluation
-        scores: dict[str, float] = {}
-        for item in evaluation.evidence:
-            scores[item.variant_id] = max(scores.get(item.variant_id, 0), item.fit)
-        self.inheritance_scores = scores
-        count = len(rows)
+
+        def single_evidence():
+            for row in self.membership.iter_rows(parameters.branch):
+                yield from self.inheritance_evaluator.evaluate(
+                    [self._variant_genotypes(row)]
+                ).evidence
+
+        self.evidence_store.write(single_evidence())
+        # Pair candidates are joined on disk. Even a very large gene never becomes a Python list.
+        connection = self.membership._connection
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS compound_pairs (run_id VARCHAR, variant_a "
+            "VARCHAR, variant_b VARCHAR, payload VARCHAR, PRIMARY KEY(run_id, variant_a,"
+            " variant_b))"
+        )
+        potential_pairs = connection.execute(
+            "SELECT coalesce(sum(n*(n-1)/2),0) FROM ("
+            "SELECT count(*) n FROM variants v JOIN candidate_membership m USING(variant_id) "
+            "WHERE m.run_id=? AND m.branch=? AND v.genotype IN ('0/1','1/0','0|1','1|0') "
+            "GROUP BY upper(v.gene), v.chromosome)",
+            [self.membership.run_id, parameters.branch],
+        ).fetchone()[0]
+        if potential_pairs > 100000:
+            raise VariantToolError("Compound-pair work budget exceeded; refine candidates first")
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                """SELECT a.variant_id, b.variant_id
+                FROM variants a JOIN variants b ON upper(a.gene)=upper(b.gene) AND
+a._row_id<b._row_id
+                JOIN candidate_membership ma ON ma.variant_id=a.variant_id
+                JOIN candidate_membership mb ON mb.variant_id=b.variant_id
+                WHERE ma.run_id=? AND mb.run_id=? AND ma.branch=? AND mb.branch=?
+                AND a.genotype IN ('0/1','1/0','0|1','1|0')
+                AND b.genotype IN ('0/1','1/0','0|1','1|0')
+                ORDER BY a._row_id, b._row_id""",
+                [
+                    self.membership.run_id,
+                    self.membership.run_id,
+                    parameters.branch,
+                    parameters.branch,
+                ],
+            )
+            while pairs := cursor.fetchmany(128):
+                for first, second in pairs:
+                    rows = connection.execute(
+                        "SELECT * FROM variants WHERE variant_id IN (?, ?) ORDER BY _row_id",
+                        [first, second],
+                    )
+                    columns = [item[0] for item in rows.description]
+                    variants = [
+                        self._variant_genotypes(dict(zip(columns, row, strict=True)))
+                        for row in rows.fetchall()
+                    ]
+                    result = self.inheritance_evaluator.evaluate(variants)
+                    for pair in result.compound_heterozygous_pairs:
+                        connection.execute(
+                            "INSERT OR REPLACE INTO compound_pairs VALUES (?, ?, ?, ?)",
+                            [
+                                self.membership.run_id,
+                                pair.variant_a,
+                                pair.variant_b,
+                                pair.model_dump_json(),
+                            ],
+                        )
+                    self.evidence_store.write(
+                        item
+                        for item in result.evidence
+                        if item.model in {"compound_heterozygous", "autosomal_recessive"}
+                    )
+        finally:
+            cursor.close()
+        summaries = []
+        for model, strong, uncertain in connection.execute(
+            (
+                "SELECT method, count(*) FILTER (WHERE score>=0.8), count(*) FILTER(WHERE "
+                "score>=0.4 AND score<0.8) FROM evidence WHERE run_id=? AND "
+                "method<>'resnik_bma' GROUP BY method ORDER BY method"
+            ),
+            [self.membership.run_id],
+        ).fetchall():
+            top = connection.execute(
+                (
+                    "SELECT variant_id FROM evidence WHERE run_id=? AND method=? AND score>0 "
+                    "ORDER BY score DESC, variant_id LIMIT 5"
+                ),
+                [self.membership.run_id, model],
+            ).fetchall()
+            summaries.append(
+                {
+                    "model": model,
+                    "strong_matches": strong,
+                    "uncertain_matches": uncertain,
+                    "top_variant_ids": [row[0] for row in top],
+                }
+            )
+        pairs = connection.execute(
+            (
+                "SELECT payload FROM compound_pairs WHERE run_id=? ORDER BY variant_a, "
+                "variant_b LIMIT 10"
+            ),
+            [self.membership.run_id],
+        ).fetchall()
+        count = self._require_branch(parameters.branch)
         return ToolObservation(
             action="evaluate_inheritance",
             branch=parameters.branch,
             before_count=count,
             after_count=count,
             feedback=(
-                "Evaluated deterministic inheritance hypotheses; uncertain phase was retained."
+                "Persisted inheritance evidence and uncertain pairs; returned bounded summaries."
             ),
             data={
-                "summaries": [item.model_dump(mode="json") for item in evaluation.summaries],
-                "compound_heterozygous_pairs": [
-                    item.model_dump(mode="json")
-                    for item in evaluation.compound_heterozygous_pairs[:10]
-                ],
+                "summaries": summaries,
+                "compound_heterozygous_pairs": [json.loads(row[0]) for row in pairs],
             },
         )
 
     def create_evidence_branches(
         self, parameters: CreateEvidenceBranchesParameters
     ) -> ToolObservation:
-        if self.phenotype_toolbox is None or not self.phenotype_scores:
-            raise VariantToolError("Phenotype evidence must be evaluated before branch creation.")
-        if self.inheritance_evaluator is None or not self.inheritance_scores:
-            raise VariantToolError("Inheritance evidence must be evaluated before branch creation.")
-        rows = self.candidate_rows(parameters.branch)
-        phenotype_ids = [
-            str(row["variant_id"])
-            for row in rows
-            if self.phenotype_scores.get(str(row.get("gene") or "").upper(), 0)
-            >= self.phenotype_priority_threshold
-        ]
-        inheritance_ids = [
-            str(row["variant_id"])
-            for row in rows
-            if self.inheritance_scores.get(str(row["variant_id"]), 0)
-            >= self.inheritance_priority_threshold
-        ]
-        novel_ids = [
-            str(row["variant_id"])
-            for row in rows
-            if not self.phenotype_toolbox.store.gene_associations(str(row.get("gene") or "UNKNOWN"))
+        if not self.phenotype_scores or not self.inheritance_scores:
+            raise VariantToolError(
+                "Phenotype and inheritance evidence must be evaluated before branch creation."
+            )
+        run_id = self.membership.run_id
+        specifications = [
+            (
+                parameters.phenotype_branch,
+                "phenotype_score_priority",
+                (
+                    "EXISTS (SELECT 1 FROM evidence e WHERE e.run_id=? AND e.method='resnik_bma'"
+                    " AND e.gene=upper(v.gene) AND e.score>=?)"
+                ),
+                [run_id, self.phenotype_priority_threshold],
+            ),
+            (
+                parameters.inheritance_branch,
+                "inheritance_fit_priority",
+                (
+                    "EXISTS (SELECT 1 FROM evidence e WHERE e.run_id=? AND "
+                    "e.method<>'resnik_bma' AND e.variant_id=v.variant_id AND e.score>=?)"
+                ),
+                [run_id, self.inheritance_priority_threshold],
+            ),
+            (
+                parameters.novel_gene_branch,
+                "no_known_hpo_association_rescue",
+                (
+                    "NOT EXISTS (SELECT 1 FROM evidence e WHERE e.run_id=? AND "
+                    "e.method='resnik_bma' AND e.gene=upper(v.gene) AND e.known)"
+                ),
+                [run_id],
+            ),
         ]
         try:
             with self.membership.transaction():
-                self.membership.branch_from_ids(
-                    source=parameters.branch,
-                    target=parameters.phenotype_branch,
-                    variant_ids=phenotype_ids,
-                    operation="phenotype_score_priority",
-                )
-                self.membership.branch_from_ids(
-                    source=parameters.branch,
-                    target=parameters.inheritance_branch,
-                    variant_ids=inheritance_ids,
-                    operation="inheritance_fit_priority",
-                )
-                self.membership.branch_from_ids(
-                    source=parameters.branch,
-                    target=parameters.novel_gene_branch,
-                    variant_ids=novel_ids,
-                    operation="no_known_hpo_association_rescue",
-                )
+                for target, operation, predicate, arguments in specifications:
+                    self.membership.filter_branch(
+                        source=parameters.branch,
+                        target=target,
+                        operation=operation,
+                        predicate_sql=predicate,
+                        predicate_parameters=arguments,
+                    )
         except (KeyError, ValueError) as exc:
             raise VariantToolError(str(exc)) from exc
-        count = len(rows)
+        count = self._require_branch(parameters.branch)
         return ToolObservation(
             action="create_evidence_branches",
             branch=parameters.branch,
             before_count=count,
             after_count=count,
-            feedback=(
-                "Created phenotype, inheritance, and non-destructive novel-gene rescue branches."
-            ),
+            feedback="Created persistent evidence and novel-gene rescue branches.",
             data={
                 "phenotype_branch": parameters.phenotype_branch,
-                "phenotype_count": len(phenotype_ids),
+                "phenotype_count": self.membership.count(parameters.phenotype_branch),
                 "inheritance_branch": parameters.inheritance_branch,
-                "inheritance_count": len(inheritance_ids),
+                "inheritance_count": self.membership.count(parameters.inheritance_branch),
                 "novel_gene_branch": parameters.novel_gene_branch,
-                "novel_gene_count": len(novel_ids),
+                "novel_gene_count": self.membership.count(parameters.novel_gene_branch),
             },
         )
 

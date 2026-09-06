@@ -32,6 +32,10 @@ BLOCKED_SUFFIXES = (
     ".ped",
     ".parquet",
     ".duckdb",
+    ".duckdb.wal",
+    ".resource",
+    ".tar.gz",
+    ".zip",
 )
 SECRET_PATTERNS = {
     "Hugging Face access token": re.compile(r"\bhf_[A-Za-z0-9]{20,}\b"),

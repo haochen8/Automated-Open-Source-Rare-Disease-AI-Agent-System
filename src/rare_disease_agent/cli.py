@@ -23,6 +23,7 @@ from rare_disease_agent.models import (
 from rare_disease_agent.models.hardware import GIB
 from rare_disease_agent.ranking.schemas import SyntheticBenchmarkResult
 from rare_disease_agent.reporting.audit import AuditWriter
+from rare_disease_agent.resource_management.cli import app as resources_app
 from rare_disease_agent.storage.parquet import write_variants_parquet
 from rare_disease_agent.synthetic import SYNTHETIC_CASE_NAMES
 from rare_disease_agent.tools.variants.vcf import parse_vcf
@@ -37,6 +38,8 @@ app = typer.Typer(
 )
 models_app = typer.Typer(help="Inspect model/runtime options without downloading weights.")
 variants_app = typer.Typer(help="Deterministic variant data preparation commands.")
+
+app.add_typer(resources_app, name="resources")
 app.add_typer(models_app, name="models")
 app.add_typer(variants_app, name="variants")
 
@@ -418,3 +421,30 @@ def benchmark_synthetic(
     AuditWriter._write_json(summary_path, summary)
     typer.echo(json.dumps(summary.model_dump(mode="json"), indent=2))
     typer.echo(f"Summary: {summary_path}")
+
+
+@app.command("track1-dry-run")
+def phase4_command(
+    case: str = typer.Option("missing-parent"),
+    output_dir: Annotated[Path, typer.Option()] = Path("runs/phase4"),
+    run_id: str = typer.Option("phase4-synthetic"),
+) -> None:
+    """Restartable synthetic-only, mock-only Phase 4 research workflow."""
+    from rare_disease_agent.workflows.phase4 import phase4_run
+
+    typer.echo(phase4_run(output_dir, case_name=case, run_id=run_id))
+
+
+@app.command("benchmark-phase4")
+def phase4_benchmark_command(
+    output_dir: Annotated[Path, typer.Option()] = Path("runs/phase4-benchmark"),
+    seed: int = typer.Option(17),
+    weights: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Offline synthetic calibration/evaluation; never downloads data or models."""
+    from rare_disease_agent.ranking.evaluation import benchmark_phase4
+
+    result = benchmark_phase4(
+        output_dir, seed=seed, weight_sets=json.loads(weights.read_text()) if weights else None
+    )
+    typer.echo(json.dumps(result["metrics"]))
