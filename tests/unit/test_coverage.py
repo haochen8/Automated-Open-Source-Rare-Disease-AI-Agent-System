@@ -60,3 +60,70 @@ def test_sequential_fallback_keeps_original_and_index_unchanged(tmp_path):
     source.write_text(source.read_text().replace("ID=X", "ID=Y"))
     with pytest.raises(ValueError, match="context"):
         scan_vcf_contig_statistics(source)
+
+
+def test_only_unambiguous_standard_aliases_are_proposed():
+    from rare_disease_agent.workflows.coverage import standard_reference_aliases
+
+    plan = standard_reference_aliases(["M\t100\t5", "ALT\t100\t8"], {"MT": 100}, {"MT"})
+    assert plan["proposed_aliases"] == {"M": "MT"}
+    assert plan["affected_records"] == 5
+    assert plan["renaming_performed"] is False
+    assert not standard_reference_aliases(["M\t99\t5"], {"MT": 100}, {"MT"})["proposed_aliases"]
+    assert not standard_reference_aliases(["M\t100\t5"], {"MT": 100}, set())["proposed_aliases"]
+    with pytest.raises(ValueError, match="collide"):
+        standard_reference_aliases(["M\t100\t5", "MT\t100\t6"], {"MT": 100}, {"MT"})
+
+
+def test_publisher_synonyms_are_transitive_and_all_records_stay_accounted():
+    from rare_disease_agent.workflows.coverage import synonym_reference_plan
+
+    plan = synonym_reference_plan(
+        ["1\t100\t3", "alternate_name\t40\t5", "unavailable\t50\t7"],
+        {"1": 100, "accession.1": 40},
+        {"1", "accession.1"},
+        ["alternate_name\tintermediate", "intermediate\taccession.1"],
+    )
+    assert plan["records"] == 15
+    assert plan["record_counts"]["exact_reference_available"] == 3
+    assert plan["record_counts"]["synonym_reference_available"] == 5
+    assert plan["record_counts"]["reference_missing"] == 7
+    assert plan["contig_plan"][1]["target"] == "accession.1"
+    assert plan["renaming_performed"] is False
+
+
+def test_synonyms_never_choose_between_references_or_merge_source_records():
+    from rare_disease_agent.workflows.coverage import synonym_reference_plan
+
+    ambiguous = synonym_reference_plan(
+        ["alias\t40\t5"],
+        {"first": 40, "second": 40},
+        {"first", "second"},
+        ["alias\tfirst", "first\tsecond"],
+    )
+    assert ambiguous["record_counts"]["ambiguous_reference"] == 5
+    wrong = synonym_reference_plan(["alias\t39\t5"], {"first": 40}, {"first"}, ["alias\tfirst"])
+    assert wrong["record_counts"]["reference_length_mismatch"] == 5
+    with pytest.raises(ValueError, match="collide"):
+        synonym_reference_plan(
+            ["alias\t40\t5", "first\t40\t2"], {"first": 40}, {"first"}, ["alias\tfirst"]
+        )
+    with pytest.raises(ValueError, match="schema"):
+        synonym_reference_plan(["alias\t40\t5"], {"first": 40}, {"first"}, ["alias first"])
+
+
+def test_prefix_candidates_remain_a_nonmutating_explicit_plan():
+    from rare_disease_agent.workflows.coverage import synonym_reference_plan
+
+    stats = ["Un_SYNTHv1\t40\t5", "M\t100\t2"]
+    refs = {"SYNTH.1": 40, "MT": 100}
+    pairs = ["SYNTH.1\tchrUn_SYNTHv1"]
+    assert (
+        synonym_reference_plan(stats, refs, set(refs), pairs)["record_counts"]["reference_missing"]
+        == 7
+    )
+    plan = synonym_reference_plan(stats, refs, set(refs), pairs, consider_name_prefixes=True)
+    assert plan["record_counts"]["synonym_reference_available"] == 7
+    assert plan["name_prefixes_considered"] is True
+    assert plan["renaming_performed"] is False
+    assert plan["sequence_equivalence_verified"] is False

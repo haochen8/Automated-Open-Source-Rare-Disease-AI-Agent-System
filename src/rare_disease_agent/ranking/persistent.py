@@ -12,6 +12,30 @@ from rare_disease_agent.ranking.scoring import MODE_FEATURES, PreliminaryRanker
 from rare_disease_agent.reporting.provenance import evidence_provenance
 
 
+def _ranking_storage(connection):
+    """Compact keys for fresh databases; historical tables are never migrated in place."""
+    legacy = connection.execute(
+        "SELECT table_type FROM information_schema.tables "
+        "WHERE table_catalog=current_database() AND table_schema='main' "
+        "AND table_name='ranked_evidence'"
+    ).fetchone()
+    if legacy and legacy[0] == "BASE TABLE":
+        raise ValueError(
+            "Legacy ranking storage requires a fresh run; existing results stay readable"
+        )
+    connection.execute("""CREATE TABLE IF NOT EXISTS ranking_contexts (
+        context_id BIGINT PRIMARY KEY, run_id VARCHAR NOT NULL, mode VARCHAR NOT NULL,
+        provenance VARCHAR NOT NULL, UNIQUE(run_id, mode))""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS ranking_values (
+        context_id BIGINT, variant_row_id BIGINT, gene VARCHAR, rank BIGINT,
+        raw_score DOUBLE, features VARCHAR, PRIMARY KEY(context_id, variant_row_id))""")
+    connection.execute("""CREATE VIEW IF NOT EXISTS ranked_evidence AS
+        SELECT c.run_id, v.variant_id, r.gene, c.mode, r.rank, r.raw_score,
+        r.features, c.provenance FROM ranking_values r
+        JOIN ranking_contexts c USING(context_id)
+        JOIN variants v ON v._row_id=r.variant_row_id""")
+
+
 def rank_persistent(
     toolbox,
     ranker: PreliminaryRanker,
@@ -22,16 +46,14 @@ def rank_persistent(
     annotation_version: str = "synthetic-annotations-v1",
 ) -> None:
     connection = toolbox.membership._connection
-    connection.execute("""CREATE TABLE IF NOT EXISTS ranked_evidence (
-        run_id VARCHAR, variant_id VARCHAR, gene VARCHAR, mode VARCHAR, rank BIGINT,
-        raw_score DOUBLE, features VARCHAR, provenance VARCHAR,
-        PRIMARY KEY(run_id, variant_id, mode))""")
-    connection.execute(
-        "CREATE TEMP TABLE feature_batch (variant_id VARCHAR, gene VARCHAR, quality "
-        "DOUBLE, rarity DOUBLE, consequence DOUBLE, phenotype DOUBLE, inheritance "
-        "DOUBLE)"
-    )
+    _ranking_storage(connection)
+    connection.execute("BEGIN TRANSACTION")
     try:
+        connection.execute(
+            "CREATE TEMP TABLE feature_batch (variant_row_id BIGINT, variant_id VARCHAR, "
+            "gene VARCHAR, quality DOUBLE, rarity DOUBLE, consequence DOUBLE, phenotype "
+            "DOUBLE, inheritance DOUBLE)"
+        )
         cursor = connection.cursor()
         try:
             cursor.execute(
@@ -62,7 +84,12 @@ run_id=? AND method<>'resnik_bma' GROUP BY variant_id) i USING(variant_id)
                         inheritance_scores={row["variant_id"]: row["inheritance_value"]},
                     )
                     features.append(
-                        {"variant_id": row["variant_id"], "gene": gene, **feature.model_dump()}
+                        {
+                            "variant_row_id": row["_row_id"],
+                            "variant_id": row["variant_id"],
+                            "gene": gene,
+                            **feature.model_dump(),
+                        }
                     )
                 connection.register("incoming_features", pa.Table.from_pylist(features))
                 connection.execute("INSERT INTO feature_batch SELECT * FROM incoming_features")
@@ -83,23 +110,39 @@ run_id=? AND method<>'resnik_bma' GROUP BY variant_id) i USING(variant_id)
                 parameters={"weights": ranker.weights, "included_features": list(included)},
                 software=ranker.software,
             )
+            name = prefix + mode
+            context = connection.execute(
+                "SELECT context_id FROM ranking_contexts WHERE run_id=? AND mode=?",
+                [ranker.run_id, name],
+            ).fetchone()
+            if context:
+                context_id = context[0]
+                connection.execute("DELETE FROM ranking_values WHERE context_id=?", [context_id])
+                connection.execute(
+                    "UPDATE ranking_contexts SET provenance=? WHERE context_id=?",
+                    [provenance.model_dump_json(), context_id],
+                )
+            else:
+                context_id = connection.execute(
+                    "INSERT INTO ranking_contexts SELECT coalesce(max(context_id),0)+1, ?, ?, ? "
+                    "FROM ranking_contexts RETURNING context_id",
+                    [ranker.run_id, name, provenance.model_dump_json()],
+                ).fetchone()[0]
             connection.execute(
-                f"""INSERT OR REPLACE INTO ranked_evidence
-                SELECT ?, variant_id, gene, ?, row_number() OVER(ORDER BY score DESC, variant_id),
-                score,
+                f"""INSERT INTO ranking_values
+                SELECT ?, variant_row_id, gene,
+                row_number() OVER(ORDER BY score DESC, variant_id), score,
                 to_json(struct_pack(quality:=quality, rarity:=rarity, consequence:=consequence,
-                phenotype:=phenotype, inheritance:=inheritance)), ?
+                phenotype:=phenotype, inheritance:=inheritance))
                 FROM (SELECT *, round(({expression})/?, 6) score FROM feature_batch)""",
-                [
-                    ranker.run_id,
-                    prefix + mode,
-                    provenance.model_dump_json(),
-                    *[ranker.weights[name] for name in included],
-                    total,
-                ],
+                [context_id, *[ranker.weights[name] for name in included], total],
             )
+        connection.execute("COMMIT")
+    except BaseException:
+        connection.execute("ROLLBACK")
+        raise
     finally:
-        connection.execute("DROP TABLE feature_batch")
+        connection.execute("DROP TABLE IF EXISTS feature_batch")
 
 
 def ranking_rows(

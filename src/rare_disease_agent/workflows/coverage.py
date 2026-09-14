@@ -6,6 +6,136 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from rare_disease_agent.tools.variants.ingest import vcf_rows
+from rare_disease_agent.tools.variants.vep import contig_plan
+
+
+def synonym_reference_plan(
+    statistics: list[str],
+    reference_lengths: Mapping[str, int],
+    cache_contigs: set[str],
+    synonyms: Iterable[str],
+    *,
+    consider_name_prefixes: bool = False,
+) -> dict:
+    """Plan exact publisher-supplied synonym relationships, with no sequence rewriting.
+
+    The caller must pin the local synonym file and reference metadata. Multiple
+    reference targets or colliding source names are not resolved heuristically.
+    """
+    assess_contig_coverage(statistics, reference_lengths, cache_contigs)
+    parents: dict[str, str] = {}
+
+    def root(name):
+        parents.setdefault(name, name)
+        while parents[name] != name:
+            parents[name] = parents[parents[name]]
+            name = parents[name]
+        return name
+
+    for ordinal, line in enumerate(synonyms):
+        if ordinal >= 100000 or len(line) > 4096:
+            raise ValueError("Synonym resource exceeds bounded work budget")
+        fields = line.rstrip("\r\n").split("\t")
+        if len(fields) != 2 or any(not f or any(c.isspace() for c in f) for f in fields):
+            raise ValueError("Invalid local synonym resource schema")
+        left, right = map(root, fields)
+        parents[right] = left
+        if consider_name_prefixes:
+            for name in fields:
+                if name.startswith("chr") and len(name) > 3:
+                    parents[root(name[3:])] = root(name)
+    if consider_name_prefixes and "MT" in reference_lengths:
+        parents[root("M")] = root("MT")
+    targets: dict[str, set[str]] = {}
+    for name in reference_lengths:
+        targets.setdefault(root(name), set()).add(name)
+    categories = (
+        "exact_reference_available",
+        "synonym_reference_available",
+        "reference_missing",
+        "reference_length_mismatch",
+        "ambiguous_reference",
+        "annotation_cache_missing",
+    )
+    counts = dict.fromkeys(categories, 0)
+    contigs = dict.fromkeys(categories, 0)
+    rows = []
+    assigned = {}
+    for line in statistics:
+        source, length, count = line.rstrip("\n").split("\t")
+        length, count = int(length), int(count)
+        matches = {source} if source in reference_lengths else targets.get(root(source), set())
+        target = next(iter(matches)) if len(matches) == 1 else None
+        if not matches:
+            status = "reference_missing"
+        elif target is None:
+            status = "ambiguous_reference"
+        elif reference_lengths[target] != length:
+            status = "reference_length_mismatch"
+        elif target not in cache_contigs:
+            status = "annotation_cache_missing"
+        else:
+            status = (
+                "exact_reference_available" if source == target else "synonym_reference_available"
+            )
+            if target in assigned:
+                raise ValueError(
+                    "Source contigs collide after synonym mapping; reconcile explicitly"
+                )
+            assigned[target] = source
+        counts[status] += count
+        contigs[status] += 1
+        rows.append(
+            {
+                "source": source,
+                "target": target,
+                "length": length,
+                "records": count,
+                "status": status,
+            }
+        )
+    return {
+        "records": sum(counts.values()),
+        "contigs": len(rows),
+        "record_counts": counts,
+        "contig_counts": contigs,
+        "contig_plan": rows,
+        "renaming_performed": False,
+        "sequence_equivalence_verified": False,
+        "name_prefixes_considered": consider_name_prefixes,
+        "scope": "local publisher synonym and length-based reference availability plan only",
+    }
+
+
+def standard_reference_aliases(
+    statistics: list[str], reference_lengths: Mapping[str, int], cache_contigs: set[str]
+) -> dict:
+    """Propose standard-name aliases only; never remap alternate sequences or coordinates."""
+    rows = [line.rstrip("\n").split("\t") for line in statistics]
+    # Reuse strict schema/count validation before interpreting aliases.
+    assess_contig_coverage(statistics, reference_lengths, cache_contigs)
+    mapping = contig_plan(tuple(row[0] for row in rows))
+    proposals = {}
+    records = 0
+    for name, length, count in rows:
+        target = mapping[name]
+        if (
+            target is not None
+            and target != name
+            and name not in reference_lengths
+            and reference_lengths.get(target) == int(length)
+            and target in cache_contigs
+        ):
+            proposals[name] = target
+            records += int(count)
+    return {
+        "proposed_aliases": proposals,
+        "affected_records": records,
+        "coordinates_changed": False,
+        "renaming_performed": False,
+        "sequence_equivalence_verified": False,
+        "scope": "standard-name proposal with matching reference length and cache presence",
+    }
 
 
 def scan_vcf_contig_statistics(source: Path) -> list[str]:
