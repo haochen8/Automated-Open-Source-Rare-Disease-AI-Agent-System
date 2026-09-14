@@ -58,3 +58,15 @@ Phase 3 importer remains for compatibility; Phase 4 reproducibility uses the new
 Resource licenses remain the operator's responsibility: a nonempty license reference records the
 applicable terms, it does not grant rights. Keep caches, archives, receipts and normalized databases
 outside Git. No gated-resource host is allow-listed.
+
+## Import an existing public download offline
+
+`resources import-local LOCKFILE SOURCE --name NAME --cache CACHE` copies one previously downloaded
+public file into the verified cache. It checks the exact pinned size and SHA-256 while streaming,
+leaves the original unchanged, and records `acquisition: local_import`. Its receipt timestamp means
+acquisition into the cache, not the original network retrieval time. Retain the original download
+receipt separately. Existing cache entries must verify; they are never silently replaced.
+
+This operation makes no HTTP requests and does not change the fetch command's redirect policy.
+Use the same independently pinned official release locks, citation and applicable license reference.
+After import, the existing offline verify and normalize-hpo commands apply.

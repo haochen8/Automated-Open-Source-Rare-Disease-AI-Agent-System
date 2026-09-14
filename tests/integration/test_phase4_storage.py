@@ -77,3 +77,94 @@ def test_published_membership_is_self_contained_after_stage_rename(phase2_parque
     staged.rename(final)
     with duckdb.connect(str(final / "run.duckdb"), read_only=True) as connection:
         assert connection.execute("SELECT count(*) FROM variants").fetchone()[0] == count
+
+
+def test_evidence_batch_duplicates_match_sequential_maximum_and_last_tie():
+    results = []
+    for batch_size in (1, 256):
+        with duckdb.connect() as connection:
+            store = EvidenceStore(connection, "duplicates")
+            phenotype = PhenotypeToolbox(
+                load_synthetic_phenotype_store(), patient_hpo=[], run_id="duplicates"
+            )
+            item = phenotype.get_gene_phenotype_score("SYN_CAUSAL")
+            values = [
+                item.model_copy(update={"score": score, "association_count": i})
+                for i, score in enumerate((0.2, 0.9, 0.4, 0.9))
+            ]
+            store.write(values, batch_size=batch_size)
+            results.append(connection.execute("SELECT score,payload FROM evidence").fetchall())
+    assert results[0] == results[1]
+    assert results[0][0][0] == 0.9
+
+
+def test_compound_pair_failure_rolls_back_pair_table_and_pair_evidence(tmp_path, monkeypatch):
+    import json
+
+    from rare_disease_agent.agents.schemas import EvaluateInheritanceParameters
+    from rare_disease_agent.storage.parquet import write_variants_parquet
+    from rare_disease_agent.tools.inheritance.evaluator import InheritanceEvaluator
+    from rare_disease_agent.tools.inheritance.schemas import Individual, Pedigree
+    from rare_disease_agent.tools.variants.agent_tools import VariantToolbox
+    from rare_disease_agent.tools.variants.vcf import VariantRecord
+
+    source = tmp_path / "synthetic.parquet"
+    write_variants_parquet(
+        [
+            VariantRecord(
+                chromosome="1",
+                position=i + 1,
+                reference="A",
+                alternate="G",
+                variant_id=f"synthetic-{i}",
+                gene="SYN_GENE",
+                genotype="0/1",
+                genotype_calls_json=json.dumps({"sample": {"genotype": "0/1", "quality": 90}}),
+            )
+            for i in range(3)
+        ],
+        source,
+    )
+    evaluator = InheritanceEvaluator(
+        Pedigree(proband_id="sample", individuals=[Individual(id="sample")]), run_id="pairs"
+    )
+    toolbox = VariantToolbox(
+        source,
+        run_id="pairs",
+        membership_database=tmp_path / "pairs.duckdb",
+        inheritance_evaluator=evaluator,
+    )
+    original = evaluator.evaluate
+    calls = 0
+
+    def interrupted(variants):
+        nonlocal calls
+        if len(variants) == 2:
+            calls += 1
+            if calls == 2:
+                raise RuntimeError("synthetic pair interruption")
+        return original(variants)
+
+    monkeypatch.setattr(evaluator, "evaluate", interrupted)
+    try:
+        with pytest.raises(RuntimeError, match="synthetic pair"):
+            toolbox.evaluate_inheritance(EvaluateInheritanceParameters(branch="all"))
+        db = toolbox.membership._connection
+        assert db.execute("SELECT count(*) FROM compound_pairs").fetchone()[0] == 0
+        assert (
+            db.execute(
+                "SELECT count(*) FROM evidence WHERE method='compound_heterozygous'"
+            ).fetchone()[0]
+            == 0
+        )
+        monkeypatch.setattr(evaluator, "evaluate", original)
+        toolbox.evaluate_inheritance(EvaluateInheritanceParameters(branch="all"))
+        assert db.execute("SELECT count(*) FROM compound_pairs").fetchone()[0] == 3
+        assert (
+            db.execute(
+                "SELECT count(*) FROM evidence WHERE method='compound_heterozygous'"
+            ).fetchone()[0]
+            == 3
+        )
+    finally:
+        toolbox.membership.close()

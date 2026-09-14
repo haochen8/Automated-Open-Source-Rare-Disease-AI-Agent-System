@@ -2,6 +2,8 @@
 /data/*
 !/data/README.md
 /private_data/
+/private_runs/
+/private_cache/
 /models/
 /cache/
 /runs/
@@ -9,6 +11,7 @@
 /experiments/results/
 *.vcf
 *.vcf.gz
+*.vcf.gz.tbi
 *.gvcf
 *.gvcf.gz
 *.bcf

@@ -432,59 +432,67 @@ class VariantToolbox:
             "SELECT coalesce(sum(n*(n-1)/2),0) FROM ("
             "SELECT count(*) n FROM variants v JOIN candidate_membership m USING(variant_id) "
             "WHERE m.run_id=? AND m.branch=? AND v.genotype IN ('0/1','1/0','0|1','1|0') "
+            "AND m.active AND upper(trim(v.gene)) NOT IN ('','.', 'UNKNOWN','UNASSIGNED') "
             "GROUP BY upper(v.gene), v.chromosome)",
             [self.membership.run_id, parameters.branch],
         ).fetchone()[0]
         if potential_pairs > 100000:
             raise VariantToolError("Compound-pair work budget exceeded; refine candidates first")
-        cursor = connection.cursor()
-        try:
-            cursor.execute(
-                """SELECT a.variant_id, b.variant_id
-                FROM variants a JOIN variants b ON upper(a.gene)=upper(b.gene) AND
-a._row_id<b._row_id
-                JOIN candidate_membership ma ON ma.variant_id=a.variant_id
-                JOIN candidate_membership mb ON mb.variant_id=b.variant_id
-                WHERE ma.run_id=? AND mb.run_id=? AND ma.branch=? AND mb.branch=?
-                AND a.genotype IN ('0/1','1/0','0|1','1|0')
-                AND b.genotype IN ('0/1','1/0','0|1','1|0')
-                ORDER BY a._row_id, b._row_id""",
-                [
-                    self.membership.run_id,
-                    self.membership.run_id,
-                    parameters.branch,
-                    parameters.branch,
-                ],
-            )
-            while pairs := cursor.fetchmany(128):
-                for first, second in pairs:
-                    rows = connection.execute(
-                        "SELECT * FROM variants WHERE variant_id IN (?, ?) ORDER BY _row_id",
-                        [first, second],
-                    )
-                    columns = [item[0] for item in rows.description]
-                    variants = [
-                        self._variant_genotypes(dict(zip(columns, row, strict=True)))
-                        for row in rows.fetchall()
-                    ]
-                    result = self.inheritance_evaluator.evaluate(variants)
-                    for pair in result.compound_heterozygous_pairs:
-                        connection.execute(
-                            "INSERT OR REPLACE INTO compound_pairs VALUES (?, ?, ?, ?)",
-                            [
-                                self.membership.run_id,
-                                pair.variant_a,
-                                pair.variant_b,
-                                pair.model_dump_json(),
-                            ],
+
+        def pair_evidence():
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """SELECT a.variant_id, b.variant_id
+                    FROM variants a JOIN variants b ON upper(a.gene)=upper(b.gene) AND
+    a._row_id<b._row_id AND a.chromosome=b.chromosome
+                    JOIN candidate_membership ma ON ma.variant_id=a.variant_id
+                    JOIN candidate_membership mb ON mb.variant_id=b.variant_id
+                    WHERE ma.run_id=? AND mb.run_id=? AND ma.branch=? AND mb.branch=?
+                    AND ma.active AND mb.active
+                    AND upper(trim(a.gene)) NOT IN ('','.', 'UNKNOWN','UNASSIGNED')
+                    AND a.genotype IN ('0/1','1/0','0|1','1|0')
+                    AND b.genotype IN ('0/1','1/0','0|1','1|0')
+                    ORDER BY a._row_id, b._row_id""",
+                    [
+                        self.membership.run_id,
+                        self.membership.run_id,
+                        parameters.branch,
+                        parameters.branch,
+                    ],
+                )
+                while pairs := cursor.fetchmany(128):
+                    for first, second in pairs:
+                        rows = connection.execute(
+                            "SELECT * FROM variants WHERE variant_id IN (?, ?) ORDER BY _row_id",
+                            [first, second],
                         )
-                    self.evidence_store.write(
-                        item
-                        for item in result.evidence
-                        if item.model in {"compound_heterozygous", "autosomal_recessive"}
-                    )
-        finally:
-            cursor.close()
+                        columns = [item[0] for item in rows.description]
+                        variants = [
+                            self._variant_genotypes(dict(zip(columns, row, strict=True)))
+                            for row in rows.fetchall()
+                        ]
+                        result = self.inheritance_evaluator.evaluate(variants)
+                        for pair in result.compound_heterozygous_pairs:
+                            connection.execute(
+                                "INSERT OR REPLACE INTO compound_pairs VALUES (?, ?, ?, ?)",
+                                [
+                                    self.membership.run_id,
+                                    pair.variant_a,
+                                    pair.variant_b,
+                                    pair.model_dump_json(),
+                                ],
+                            )
+                        yield from (
+                            item
+                            for item in result.evidence
+                            if item.model in {"compound_heterozygous", "autosomal_recessive"}
+                        )
+            finally:
+                cursor.close()
+
+        # One bounded transaction avoids a durable commit for every pair.
+        self.evidence_store.write(pair_evidence())
         summaries = []
         for model, strong, uncertain in connection.execute(
             (

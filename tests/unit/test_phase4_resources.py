@@ -266,3 +266,78 @@ def test_hpo_conversion_failure_does_not_publish_partial_output(tmp_path):
         normalize_hpo(manager, locks, tmp_path / "failed")
     assert not (tmp_path / "failed").exists()
     assert not list(tmp_path.glob("hpo-*"))
+
+
+def test_import_local_offline_preserves_source_and_rejects_corruption(tmp_path, monkeypatch):
+    def no_network(*args, **kwargs):
+        raise AssertionError("Local import must not open an HTTP client")
+
+    monkeypatch.setattr(httpx, "Client", no_network)
+    data = b"synthetic resource"
+    source = tmp_path / "downloaded.txt"
+    source.write_bytes(data)
+    lock = lock_for(data)
+    manager = ResourceManager(tmp_path / "cache")
+    receipt = manager.import_local(lock, source)
+    assert receipt.acquisition == "local_import"
+    assert manager.verify(lock) == receipt
+    assert source.read_bytes() == data
+    assert manager.import_local(lock, source) == receipt
+    source.write_bytes(b"x" * len(data))
+    assert manager.verify(lock) == receipt  # Independent copy, not a link.
+    other = ResourceManager(tmp_path / "other-cache")
+    with pytest.raises(ValueError, match="checksum"):
+        other.import_local(lock, source)
+    assert not list(other.directory.iterdir())
+    source.write_bytes(b"x")
+    with pytest.raises(ValueError, match="size"):
+        other.import_local(lock, source)
+
+
+def test_import_local_cli_and_unknown_name(tmp_path):
+    data = b"synthetic resource"
+    source = tmp_path / "downloaded.txt"
+    source.write_bytes(data)
+    lock = lock_for(data)
+    lockfile = tmp_path / "locks.json"
+    lockfile.write_text(json.dumps([lock.model_dump()]))
+    args = [
+        "resources",
+        "import-local",
+        str(lockfile),
+        str(source),
+        "--cache",
+        str(tmp_path / "cache"),
+        "--name",
+    ]
+    runner = CliRunner()
+    assert runner.invoke(app, [*args, "absent"]).exit_code != 0
+    result = runner.invoke(app, [*args, lock.name])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["acquisition"] == "local_import"
+
+
+def test_obo_relationship_qualifiers_preserve_ancestry_and_replacement(tmp_path):
+    from rare_disease_agent.tools.phenotype.hpo import HPOOntology
+
+    source = tmp_path / "synthetic.obo"
+    source.write_text("""format-version: 1.2
+
+[Term]
+id: HP:0000001
+name: Synthetic root
+
+[Term]
+id: HP:0000002
+name: Synthetic child
+is_a: HP:0000001 {xref="SYNTHETIC:1"} ! Synthetic root
+
+[Term]
+id: HP:0000003
+name: Synthetic obsolete
+is_obsolete: true
+replaced_by: HP:0000002 ! Synthetic child
+""")
+    ontology = HPOOntology.from_obo(source)
+    assert ontology.ancestors("HP:0000002") == {"HP:0000001", "HP:0000002"}
+    assert ontology.get("HP:0000003").replaced_by == "HP:0000002"

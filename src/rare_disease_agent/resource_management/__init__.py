@@ -81,6 +81,7 @@ class ResourceReceipt(BaseModel):
     size: int = Field(gt=0)
     output_checksum: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     lock: ResourceLock
+    acquisition: Literal["download", "local_import"] = "download"
 
 
 def lock_hash(lock: ResourceLock) -> str:
@@ -137,6 +138,45 @@ class ResourceManager:
             "status": state,
             "lock_hash": lock_hash(lock),
         }
+
+    def import_local(self, lock: ResourceLock, source: Path) -> ResourceReceipt:
+        """Copy an already downloaded public file, verifying the exact locked bytes offline.
+
+        The receipt timestamp records acquisition into this cache, not a claimed network fetch.
+        Originals are never moved or linked; network redirect rules are unchanged.
+        """
+        if not source.is_file() or source.stat().st_size != lock.expected_size:
+            raise ValueError("Local resource size or file type mismatch")
+        self.directory.mkdir(parents=True, exist_ok=True)
+        artifact, receipt_path = self.paths(lock)
+        if artifact.exists() or receipt_path.exists():
+            return self.verify(lock)
+        temporary = artifact.with_name(artifact.name + "." + uuid.uuid4().hex + ".partial")
+        try:
+            digest = hashlib.sha256()
+            size = 0
+            with source.open("rb") as incoming, temporary.open("xb") as output:
+                while block := incoming.read(65536):
+                    size += len(block)
+                    if size > lock.expected_size:
+                        raise ValueError("Oversized local resource")
+                    digest.update(block)
+                    output.write(block)
+            if size != lock.expected_size or digest.hexdigest() != lock.expected_sha256:
+                raise ValueError("Local resource checksum or size mismatch")
+            receipt = ResourceReceipt(
+                lock=lock,
+                lock_hash=lock_hash(lock),
+                retrieved_at=datetime.now(UTC),
+                observed_sha256=digest.hexdigest(),
+                size=size,
+                acquisition="local_import",
+            )
+            temporary.replace(artifact)
+            atomic_json(receipt_path, receipt.model_dump(mode="json"))
+            return receipt
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def fetch(self, lock: ResourceLock, *, client: httpx.Client | None = None) -> ResourceReceipt:
         """Caller explicitly selects one resource. Redirects are checked before each request."""

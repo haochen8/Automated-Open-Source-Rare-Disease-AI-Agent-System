@@ -83,7 +83,18 @@ class EvidenceStore:
             if previous and previous != [(version,)]:
                 raise ValueError("Stale evidence data version; start a new run")
         self.max_batch_observed = max(self.max_batch_observed, len(batch))
-        self.connection.register("incoming_evidence", pa.Table.from_pylist(batch))
+        # DuckDB may keep only the first duplicate key within an INSERT input. Preserve the
+        # highest score and last equal-score payload, matching sequential upserts exactly.
+        collapsed = {}
+        for item in batch:
+            key = tuple(
+                item[name] for name in ("run_id", "variant_id", "gene", "method", "data_version")
+            )
+            if key not in collapsed or item["score"] >= collapsed[key]["score"]:
+                collapsed[key] = item
+        self.connection.register(
+            "incoming_evidence", pa.Table.from_pylist(list(collapsed.values()))
+        )
         try:
             self.connection.execute("""INSERT INTO evidence SELECT * FROM incoming_evidence
                 ON CONFLICT (run_id, variant_id, gene, method, data_version)

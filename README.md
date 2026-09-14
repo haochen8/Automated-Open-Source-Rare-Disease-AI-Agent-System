@@ -176,6 +176,18 @@ was downloaded during development.
 See [resource lifecycle](docs/resources.md), [local operations and authorized-data scope](docs/operations.md),
 and [Phase 4 results and limits](docs/phase4.md). Reports are research artifacts, not clinical outputs.
 
+## Phase 5 bounded local integration
+
+The explicit `phase5 plan` and `phase5 run` commands connect an existing verified annotation
+rehearsal to streaming VEP ingestion, deterministic HPO/inheritance evidence, six ranking
+strategies and private reports. All consequences are retained; missing context remains uncertain.
+Inputs, outputs and configuration stay outside Git. The supervised run enforces memory, time
+and disk limits and supports integrity-checked resume. This bounded workflow does not imply
+whole-genome coverage or a submission-ready case analysis.
+
+See [execution and limits](docs/phase5-execution.md) and the proposed
+[Phase 6 evaluation plan](docs/phase6-recommendation.md).
+
 ## Configuration
 
 - `configs/default.yaml`: validated runtime defaults

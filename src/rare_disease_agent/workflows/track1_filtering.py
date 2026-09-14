@@ -63,6 +63,7 @@ class VariantFilteringWorkflow:
         run_id: str,
         causal_variant_id: str | None = None,
         toolbox: VariantToolbox | None = None,
+        retain_empty_subbranches: bool = False,
     ) -> None:
         self.audit = AuditWriter(run_directory)
         self.toolbox = toolbox or VariantToolbox(
@@ -74,6 +75,7 @@ class VariantFilteringWorkflow:
         self.config = config
         self.run_id = run_id
         self.causal_variant_id = causal_variant_id
+        self.retain_empty_subbranches = retain_empty_subbranches
         self.graph = self._build_graph()
 
     def _initial_inspection(self, raw: VariantFilteringState | dict[str, Any]) -> dict[str, Any]:
@@ -251,11 +253,23 @@ class VariantFilteringWorkflow:
             self._record(state, decision, observation, "stopped")
             return state.model_dump(mode="python")
 
-        if decision.action in REDUCTION_ACTIONS and (
-            observation.after_count == 0
-            or (
-                state.initial_variant_count >= state.minimum_candidate_count
-                and observation.after_count < state.minimum_candidate_count
+        safe_empty_subbranch = (
+            self.retain_empty_subbranches
+            and observation.after_count == 0
+            and observation.branch not in {"all", "conservative", "novel-gene-rescue", "ensemble"}
+            and self.toolbox.membership.count("conservative")
+            == self.toolbox.membership.count("all")
+            > 0
+        )
+        if (
+            decision.action in REDUCTION_ACTIONS
+            and not safe_empty_subbranch
+            and (
+                observation.after_count == 0
+                or (
+                    state.initial_variant_count >= state.minimum_candidate_count
+                    and observation.after_count < state.minimum_candidate_count
+                )
             )
         ):
             self.toolbox.delete_branch(observation.branch)

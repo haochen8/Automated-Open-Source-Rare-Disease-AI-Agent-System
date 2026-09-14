@@ -175,6 +175,10 @@ def test_adapter_supervisor_kills_process_group_on_memory_limit(tmp_path, monkey
         ),
     )
     monkeypatch.setattr(adapters.os, "killpg", lambda pid, sig: killed.append(pid))
+    observation = {}
     with pytest.raises(RuntimeError, match="limit"):
-        adapters.bounded_process(value.preview(), value)
+        adapters.bounded_process(value.preview(), value, observation=observation)
     assert killed == [12345]
+    assert observation["peak_sampled_rss_bytes"] == 1024**3
+    assert observation["peak_sampled_output_bytes"] == 0
+    assert observation["runtime_seconds"] >= 0

@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -27,7 +28,9 @@ class ToolJob(BaseModel):
     reference_path: Path
     reference_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     cache_path: Path | None = None
+    annotation_profile: Literal["minimal", "track1"] = "minimal"
     threads: int = Field(default=2, ge=1, le=4)
+    buffer_size: int = Field(default=500, ge=1, le=5000)
     timeout_seconds: int = Field(default=300, ge=1, le=3600)
     memory_mb: int = Field(default=2048, ge=128, le=8192)
     output_limit_mb: int = Field(default=1024, ge=1, le=8192)
@@ -58,7 +61,7 @@ class ToolJob(BaseModel):
             ]
         if self.cache_path is None or self.data_version != self.tool_version.split(".")[0]:
             raise ValueError("VEP requires a matching pinned local cache version")
-        return [
+        command = [
             "vep",
             "--offline",
             "--cache",
@@ -70,10 +73,8 @@ class ToolJob(BaseModel):
             self.genome_build,
             "--fasta",
             reference,
-            "--fork",
-            str(self.threads),
             "--buffer_size",
-            "500",
+            str(self.buffer_size),
             "--no_stats",
             "--vcf",
             "--input_file",
@@ -81,13 +82,44 @@ class ToolJob(BaseModel):
             "--output_file",
             output,
         ]
+        # VEP enters its forking path even for --fork 1. Omit it for a single
+        # worker to avoid unnecessary child processes and duplicated cache RSS.
+        if self.threads > 1:
+            command.extend(["--fork", str(self.threads)])
+        if self.annotation_profile == "track1":
+            # Flag a preferred consequence while retaining every transcript/gene annotation.
+            command.extend(
+                [
+                    "--symbol",
+                    "--allele_number",
+                    "--canonical",
+                    "--mane",
+                    "--flag_pick_allele_gene",
+                    "--check_existing",
+                    "--af_gnomade",
+                    "--af_gnomadg",
+                ]
+            )
+        return command
 
 
 class ProcessRunner(Protocol):
     def __call__(self, command: list[str], job: ToolJob) -> int: ...
 
 
-def bounded_process(command: list[str], job: ToolJob) -> int:
+def _tool_environment(executable: str) -> dict[str, str]:
+    """Keep isolated interpreter/helpers discoverable without inheriting user secrets."""
+    path = Path(executable)
+    search_path = str(path.parent) + os.pathsep + os.defpath if path.is_absolute() else os.defpath
+    return {
+        "PATH": search_path,
+        "LANG": "C",
+        "LANGSMITH_TRACING": "false",
+        "LANGCHAIN_TRACING_V2": "false",
+    }
+
+
+def bounded_process(command: list[str], job: ToolJob, *, observation: dict | None = None) -> int:
     """Local child-process supervisor; no shell, network flags or captured patient output."""
     with subprocess.Popen(
         command,
@@ -95,22 +127,32 @@ def bounded_process(command: list[str], job: ToolJob) -> int:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
-        env={
-            "PATH": os.defpath,
-            "LANG": "C",
-            "LANGSMITH_TRACING": "false",
-            "LANGCHAIN_TRACING_V2": "false",
-        },
+        env=_tool_environment(command[0]),
     ) as process:
         start = time.monotonic()
+        peak_memory = peak_size = 0
         try:
             while process.poll() is None:
-                parent = psutil.Process(process.pid)
-                children = parent.children(recursive=True)
-                memory = sum(
-                    item.memory_info().rss for item in [parent, *children] if item.is_running()
-                )
+                memory = 0
+                try:
+                    parent = psutil.Process(process.pid)
+                    children = parent.children(recursive=True)
+                except psutil.NoSuchProcess:
+                    continue
+                for item in [parent, *children]:
+                    try:
+                        memory += item.memory_info().rss
+                    except psutil.NoSuchProcess:
+                        # Short-lived tools can exit between poll() and the RSS query.
+                        continue
                 size = job.output_path.stat().st_size if job.output_path.exists() else 0
+                peak_memory, peak_size = max(peak_memory, memory), max(peak_size, size)
+                if observation is not None:
+                    observation.update(
+                        runtime_seconds=round(time.monotonic() - start, 3),
+                        peak_sampled_rss_bytes=peak_memory,
+                        peak_sampled_output_bytes=peak_size,
+                    )
                 if (
                     time.monotonic() - start > job.timeout_seconds
                     or memory > job.memory_mb * 1024**2
@@ -121,7 +163,8 @@ def bounded_process(command: list[str], job: ToolJob) -> int:
             return process.returncode
         except BaseException:
             if process.poll() is None:
-                os.killpg(process.pid, signal.SIGKILL)
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
             process.wait()
             raise
 
@@ -132,6 +175,7 @@ def execute_job(
     authorized: bool = False,
     runner: ProcessRunner = bounded_process,
     observed_tool_version: str | None = None,
+    observation: dict | None = None,
 ) -> dict:
     command = job.preview()
     if not authorized:
@@ -141,16 +185,17 @@ def execute_job(
         resolved = shutil.which(command[0])
         if resolved is None:
             raise FileNotFoundError("Pinned annotation tool is not installed")
-        command[0] = str(Path(resolved).resolve())
+        # Preserve a bin/ launcher symlink: its siblings contain the pinned Perl and tabix.
+        command[0] = str(Path(resolved).absolute())
         executable_checksum = sha256(Path(command[0]))
         # Independently observe the executable for real execution.
         observed = subprocess.run(
-            [command[0], "--version"],
+            [command[0], "--help" if job.provider == "vep" else "--version"],
             check=True,
             capture_output=True,
             text=True,
             timeout=5,
-            env={"PATH": os.defpath, "LANG": "C"},
+            env=_tool_environment(command[0]),
         )
         import re
 
@@ -173,7 +218,10 @@ def execute_job(
         raise RuntimeError("Insufficient live memory or disk")
     started = time.time()
     try:
-        code = runner(command, job)
+        if observation is not None and runner is bounded_process:
+            code = bounded_process(command, job, observation=observation)
+        else:
+            code = runner(command, job)
         if code != 0 or not job.output_path.is_file() or job.output_path.stat().st_size == 0:
             raise RuntimeError("Annotation failed or produced no output")
         if job.output_path.stat().st_size > job.output_limit_mb * 1024**2:
@@ -191,6 +239,7 @@ def execute_job(
             "ended_at": time.time(),
             "configuration": job.model_dump(mode="json"),
             "returncode": code,
+            "process_observation": observation,
         }
     except BaseException:
         job.output_path.unlink(missing_ok=True)

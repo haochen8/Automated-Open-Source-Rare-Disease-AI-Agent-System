@@ -54,6 +54,19 @@ def fetch(
     typer.echo(ResourceManager(cache).fetch(selected).model_dump_json())
 
 
+@app.command("import-local")
+def import_local(
+    lockfile: Path,
+    source: Path,
+    name: str = typer.Option(...),
+    cache: Annotated[Path, typer.Option()] = Path("cache/public"),
+):
+    selected = next((lock for lock in read_locks(lockfile) if lock.name == name), None)
+    if selected is None:
+        raise typer.BadParameter("Unknown resource name")
+    typer.echo(ResourceManager(cache).import_local(selected, source).model_dump_json())
+
+
 @app.command("normalize-hpo")
 def normalize(
     lockfile: Path, output: Path, cache: Annotated[Path, typer.Option()] = Path("cache/public")

@@ -166,3 +166,12 @@ def test_deep_pedigree_validation_is_iterative_and_rejects_cycles():
     people[-1].mother_id = "person0"
     with pytest.raises(ValueError, match="cycle"):
         Pedigree(proband_id="person0", individuals=people)
+
+
+@pytest.mark.parametrize("gene,chromosome", [("UNKNOWN", "1"), ("UNASSIGNED", "1"), ("GENE", "2")])
+def test_unknown_gene_or_different_chromosome_cannot_define_compound_pair(gene, chromosome):
+    evaluator = InheritanceEvaluator(synthetic_pedigree(), run_id="synthetic-pair-context")
+    first = variant(variant_id="first", gene=gene)
+    second = variant(variant_id="second", gene=gene, chromosome=chromosome)
+    assert evaluator.find_compound_heterozygous_pairs([first, second]) == []
+    assert evaluator.evaluate([first]).evidence

@@ -28,6 +28,7 @@ from rare_disease_agent.storage.parquet import write_variants_parquet
 from rare_disease_agent.synthetic import SYNTHETIC_CASE_NAMES
 from rare_disease_agent.tools.variants.vcf import parse_vcf
 from rare_disease_agent.workflows.mock_strategy import default_mock_decisions, phase3_mock_decisions
+from rare_disease_agent.workflows.phase5_cli import app as phase5_app
 from rare_disease_agent.workflows.track1_evidence import Track1EvidenceWorkflow
 from rare_disease_agent.workflows.track1_filtering import VariantFilteringWorkflow
 
@@ -42,6 +43,7 @@ variants_app = typer.Typer(help="Deterministic variant data preparation commands
 app.add_typer(resources_app, name="resources")
 app.add_typer(models_app, name="models")
 app.add_typer(variants_app, name="variants")
+app.add_typer(phase5_app, name="phase5")
 
 
 def _version_callback(value: bool) -> None:

@@ -87,6 +87,10 @@ class InheritanceEvaluator:
         quality_passed, quality_warnings = self._quality(required_calls)
         if not quality_passed:
             fit = min(fit, 0.5)
+        person = self.pedigree.individual(self.pedigree.proband_id)
+        if person is None or person.affected is None:
+            fit = min(fit, 0.5)
+            warnings = [*warnings, "Analyzed sample affected status is unknown; fit is uncertain."]
         return InheritanceEvidence(
             variant_id=variant.variant_id,
             gene=variant.gene,
@@ -228,13 +232,18 @@ class InheritanceEvaluator:
     def find_compound_heterozygous_pairs(
         self, variants: list[VariantGenotypes]
     ) -> list[CompoundHeterozygousPair]:
-        by_gene: dict[str, list[VariantGenotypes]] = defaultdict(list)
+        by_gene: dict[tuple[str, str], list[VariantGenotypes]] = defaultdict(list)
         for variant in variants:
             proband = variant.call(self.pedigree.proband_id)
-            if proband and proband.is_heterozygous:
-                by_gene[variant.gene.upper()].append(variant)
+            gene = variant.gene.strip().upper()
+            if (
+                proband
+                and proband.is_heterozygous
+                and gene not in {"", ".", "UNKNOWN", "UNASSIGNED"}
+            ):
+                by_gene[(gene, variant.chromosome.upper().removeprefix("CHR"))].append(variant)
         pairs: list[CompoundHeterozygousPair] = []
-        for gene, candidates in sorted(by_gene.items()):
+        for (gene, _), candidates in sorted(by_gene.items()):
             for index, first in enumerate(candidates):
                 for second in candidates[index + 1 :]:
                     first_origin = self._parental_origin(first)
@@ -332,20 +341,14 @@ class InheritanceEvaluator:
             for variant_id in (pair.variant_a, pair.variant_b):
                 variant = next(item for item in variants if item.variant_id == variant_id)
                 proband, mother, father = self._calls(variant)
-                quality_passed, _ = self._quality([proband, mother, father])
                 evidence.append(
-                    InheritanceEvidence(
-                        variant_id=variant_id,
-                        gene=pair.gene,
+                    self._result(
+                        variant,
                         model="compound_heterozygous",
-                        fit=pair.confidence if quality_passed else min(pair.confidence, 0.5),
-                        proband_genotype=proband.genotype if proband else None,
-                        mother_genotype=mother.genotype if mother else None,
-                        father_genotype=father.genotype if father else None,
-                        quality_checks_passed=quality_passed,
+                        fit=pair.confidence,
                         evidence=pair.evidence,
                         warnings=pair.warnings,
-                        provenance=pair.provenance,
+                        required_calls=[proband, mother, father],
                     )
                 )
         evidence.extend(self._autosomal_recessive_evidence(variants, evidence))

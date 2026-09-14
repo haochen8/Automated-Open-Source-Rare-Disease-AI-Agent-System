@@ -59,11 +59,13 @@ class HPOOntology:
                 elif key == "is_a":
                     parents = current.setdefault("parents", [])
                     assert isinstance(parents, list)
-                    parents.append(value.split(" ! ", 1)[0])
+                    # OBO relationships may carry trailing {xref=...} qualifiers and comments.
+                    # Those remain available in the pinned source, not in the identifier field.
+                    parents.append(value.split()[0])
                 elif key == "is_obsolete":
                     current["obsolete"] = value.lower() == "true"
                 elif key == "replaced_by":
-                    current["replaced_by"] = value
+                    current["replaced_by"] = value.split()[0]
         finish()
         if not terms:
             raise ValueError(f"No HPO terms found in {source}")

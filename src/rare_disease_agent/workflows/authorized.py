@@ -51,6 +51,7 @@ def authorized_dry_run(
     hpo_terms: list[str],
     run_id: str,
     seed: int = 17,
+    phase5_strategies: bool = False,
 ) -> Path:
     """The operator must explicitly confirm the exact input and output scope before calling.
 
@@ -92,6 +93,7 @@ def authorized_dry_run(
                 "software": software.model_dump(),
                 "mode": "authorized-local-mock",
                 "schema_version": 1,
+                "phase5_strategies": phase5_strategies,
             }
             runner = RestartableRun(output, run_id=run_id, configuration=configuration)
 
@@ -118,11 +120,14 @@ def authorized_dry_run(
                     ),
                 )
                 try:
+                    decisions = phase3_mock_decisions()
+                    if phase5_strategies:
+                        for decision in decisions:
+                            if decision.action == "merge_branches":
+                                decision.parameters["branches"].append("conservative")
                     filtered = VariantFilteringWorkflow(
                         parquet_path=source,
-                        agent=VariantFilteringAgent(
-                            MockLLMBackend(structured_responses=phase3_mock_decisions())
-                        ),
+                        agent=VariantFilteringAgent(MockLLMBackend(structured_responses=decisions)),
                         run_directory=path,
                         config=settings.agents.variant_filtering.model_copy(
                             update={
@@ -133,6 +138,7 @@ def authorized_dry_run(
                         ),
                         run_id=run_id,
                         toolbox=toolbox,
+                        retain_empty_subbranches=phase5_strategies,
                     ).run()
                     if filtered.metrics.stop_reason != "evidence_ready_for_ranking":
                         raise RuntimeError(
@@ -149,6 +155,10 @@ def authorized_dry_run(
                         filtered.state.current_branch,
                         annotation_version=specification.transcript_release,
                     )
+                    if phase5_strategies:
+                        from rare_disease_agent.ranking.strategies import rank_strategies
+
+                        rank_strategies(toolbox, ranker, specification.transcript_release)
                     toolbox.evidence_store.export(path / "evidence.parquet")
                     atomic_json(path / "provenance.json", configuration)
                 finally:

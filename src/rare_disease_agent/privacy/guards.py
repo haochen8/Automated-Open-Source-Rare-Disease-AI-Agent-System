@@ -10,6 +10,8 @@ from pydantic import BaseModel
 
 BLOCKED_DIRECTORY_NAMES = {
     "private_data",
+    "private_runs",
+    "private_cache",
     "models",
     "cache",
     "secrets",
@@ -18,6 +20,7 @@ BLOCKED_DIRECTORY_NAMES = {
 BLOCKED_SUFFIXES = (
     ".vcf",
     ".vcf.gz",
+    ".vcf.gz.tbi",
     ".gvcf",
     ".gvcf.gz",
     ".bcf",
