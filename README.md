@@ -201,11 +201,21 @@ data is disabled by default.
 ## Testing and privacy checks
 
 ```bash
-pytest
-python scripts/privacy_guard.py --all
-ruff check .
-ruff format --check .
+make verify PYTHON=.venv/bin/python
 ```
+
+The check-only gate requires an existing Python 3.11+ development environment and Git/Make.
+It verifies this worktree's package import, then runs the full test/coverage suite, Ruff lint and
+format checks, privacy scan, dependency consistency, package build, and staged/unstaged whitespace
+checks. It never installs dependencies or fixes files. Dirty worktrees are allowed; tracked files
+and the index must remain unchanged during verification. Any failed check or unmet prerequisite
+returns nonzero. Normal coverage/cache/build outputs are allowed. Each attempt replaces local
+`.verification/evidence.json` before checks begin; only a completed, unchanged passing run records
+PASS. After final diff review, run `make verification-status PYTHON=.venv/bin/python` to confirm the
+current files and index still match that evidence. Any relevant edit, including documentation,
+untracked source additions, staging, or HEAD changes, requires new verification. Unknown unignored
+files fail closed. Generated evidence is ignored and must not be committed. See
+[verification operations](docs/operations.md#verification) for details.
 
 Tests use only synthetic data and do not invoke or download an LLM. The pre-commit privacy guard
 rejects genomic file types, generated analytical stores, restricted directories, VCF content

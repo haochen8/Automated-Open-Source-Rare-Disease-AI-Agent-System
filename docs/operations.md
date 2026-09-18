@@ -78,17 +78,89 @@ Command references: [bcftools norm](https://www.htslib.org/doc/bcftools.html),
 
 ## Verification
 
+From this worktree's root, select the existing development interpreter explicitly:
+
 ```bash
-python -m pytest --cov=rare_disease_agent --cov-report=term-missing
-python -m ruff check .
-python -m ruff format --check .
-python scripts/privacy_guard.py --all
-python -m pip check
-python -m hatchling build
-git diff --check
+make verify PYTHON=.venv/bin/python
 ```
 
-All automated tests refuse outbound socket connections and use mock LLMs. External tracing enabled
-through inherited LangSmith/LangChain environment settings causes the workflow to refuse execution.
-The worktree development environment uses an existing-environment symlink; prefix local checks with
-`PYTHONPATH=src` to ensure the current worktree is tested. Installed packages do not need that prefix.
+`PYTHON` is one executable name or path, not a command with flags. Its default is `python3`.
+The runner uses that interpreter for every Python check without resolving virtualenv executable
+symlinks. It sets `PYTHONPATH` to this worktree's absolute `src` directory and verifies the imported
+package's file and package directory before testing. This also applies to the shared `.venv`
+symlink used by this worktree. Direct invocation with the chosen interpreter is supported:
+`/path/to/python /path/to/worktree/scripts/verify.py` detects the root independently of the caller's
+working directory. Run Make from the root or use `make -C /path/to/worktree verify PYTHON=...`.
+
+The gate preserves the CI check order: full pytest with branch-aware coverage, Ruff lint, Ruff
+format check, privacy scan, `pip check`, Hatchling wheel/sdist build, `git diff --check`, and
+`git diff --cached --check`. It clears inherited `PYTEST_ADDOPTS` so external options cannot narrow
+the suite. CI installs dependencies separately and invokes this same gate; verification itself
+never installs, downloads, fixes, or formats anything. The separate privacy CI job remains intact.
+
+Checks stream output and stop at the first failure. The script preserves the failing process's
+exit code (signals use 128 plus the signal number); Make may return its own nonzero recipe-failure
+code. Missing tools and unmet prerequisites fail rather than skip. Success requires every check
+and the final mutation comparison to pass. Existing synthetic tests require their normal host
+resources and process-inspection permissions, including the Phase 5 supervisor's 25 GiB free-disk
+reserve. No test is omitted when these prerequisites are unavailable.
+
+Pre-existing staged/unstaged changes are allowed. The runner fingerprints tracked file bytes, symlink
+text, executable bits, index entries, and eligible untracked files before and after checks, including
+after ordinary failures or interruption. Pause other editing during verification. Changes cause
+failure and are never restored automatically. The comparison is an end-state check, not proof against transient
+changes that were reverted; forceful termination can prevent the final comparison entirely.
+An incomplete run is not successful verification.
+
+Normal `.coverage`, `.pytest_cache`, `.ruff_cache`, `__pycache__`, `dist`, and pytest temporary
+artifacts may be created; they are not automatically cleaned. Tracked standard output paths are
+rejected before checks. Review the complete task diff separately: whitespace checks do not review
+correctness, and content identity does not establish semantic correctness or review quality.
+
+Tests use synthetic data and mock LLMs. The existing pytest socket guard does not provide OS-level
+network isolation or automatically cover subprocesses. This gate adds no network operation or
+private-data run and does not extend privacy-scanner semantics. Tracing-enabled application runs
+remain subject to existing refusal checks. Dependency pinning and broader isolation are separate
+work; a shared environment can still contain different dependency versions.
+
+### Completion evidence
+
+`make verify` atomically replaces `.verification/evidence.json` with INCOMPLETE before inventory,
+imports, or checks, so an interrupted new attempt cannot reuse an earlier PASS. It records schema
+and fingerprint-policy versions, branch/HEAD, starting/ending fingerprints, selected interpreter and
+Python version, verified relative import identity, ordered commands/results, timestamps and a
+sanitized failure category. It does not store source contents, raw logs or environment dumps.
+Evidence-publication failure returns nonzero. The evidence directory must be untracked and cannot
+be a symlink; the record cannot be a symlink either. Receipts are local generated files, not product
+artifacts or attestations protected against deliberate tampering.
+
+```bash
+make verification-status PYTHON=.venv/bin/python
+```
+
+This fast command hashes local engineering files without running checks. Only current PASS returns
+zero. FAIL means a check or final content-identity comparison failed. INCOMPLETE means a prerequisite,
+inventory, receipt, interruption or publication problem prevented trustworthy completion. STALE is
+derived when current fingerprint, HEAD or fingerprint policy differs from a completed record; the
+recorded execution outcome is retained. Missing, malformed and incompatible evidence is INCOMPLETE.
+A branch-name change alone does not invalidate identical contents at the same HEAD.
+
+The SHA-256 manifest uses sorted relative paths, content hashes, executable flags, symlink text,
+missing-file markers and index object identities/modes/stages. Absolute paths, mtimes, ignored
+outputs and the reserved evidence directory are excluded. Symlink targets are never opened and
+symlink ancestors are refused. Known private/generated paths and prohibited formats are rejected
+before inventory files are read. This is not a guarantee against private text embedded in otherwise
+legitimate source or documentation; the existing privacy scan remains necessary and unchanged.
+
+Eligible untracked files are Python under `src`, `scripts`, `tests`; Markdown at root or under `docs`;
+YAML/example configuration under `configs`; YAML under `.github/workflows`; and the named root
+build/configuration files listed in `ROOT_FILES` in the verifier. Every other unignored untracked
+file makes completion INCOMPLETE without content inspection. New fixture formats require an explicit
+policy decision rather than silently being omitted. Tracked files remain included unless prohibited.
+
+Documentation edits, new/deleted source files, symlink or executable changes, and staged-only changes
+invalidate evidence. Coverage/cache/build updates do not. Review the complete diff including new
+files, then check status; any review-driven edit requires another canonical run. A matching receipt
+proves content identity only, not review quality, environment reproducibility or task correctness.
+Run one verifier at a time and pause concurrent edits. End-state hashes cannot detect a transient
+edit that was restored or prevent an edit immediately after the status command. Dependency locks and OS isolation remain out of scope.

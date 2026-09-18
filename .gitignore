@@ -68,3 +68,6 @@ build/
 *.duckdb.wal
 *.tar.gz
 *.zip
+
+# Local verification evidence
+/.verification/

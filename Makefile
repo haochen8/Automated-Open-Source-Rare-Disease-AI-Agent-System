@@ -1,4 +1,6 @@
-.PHONY: install test lint privacy models-recommend agent-filter track1-synthetic benchmark-synthetic
+PYTHON ?= python3
+
+.PHONY: verification-status verify install test lint privacy models-recommend agent-filter track1-synthetic benchmark-synthetic
 
 install:
 	python3 -m pip install -e '.[dev]'
@@ -24,3 +26,9 @@ track1-synthetic:
 
 benchmark-synthetic:
 	rare-disease-agent benchmark-synthetic
+
+verify:
+	"$(PYTHON)" scripts/verify.py
+
+verification-status:
+	"$(PYTHON)" scripts/verify.py --status
