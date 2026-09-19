@@ -136,9 +136,6 @@ Evidence is local generated output, not product data or a receipt to commit.
 
 Read the relevant material rather than every historical phase document:
 
-Use [investigate](docs/skills/investigate/SKILL.md) for unexplained behavior or unfamiliar
-code paths before implementation, or to clarify feature and architecture constraints.
-
 - [Operations](docs/operations.md): verification, synthetic runs, recovery, annotation previews.
 - [Architecture](docs/architecture.md): component boundaries and deterministic evidence flow.
 - [Privacy](docs/privacy.md): restricted artifacts and disclosure boundaries.
