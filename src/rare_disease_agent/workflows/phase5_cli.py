@@ -21,6 +21,15 @@ from rare_disease_agent.workflows.phase5 import Phase5Input
 
 app = typer.Typer(help="Private bounded Track 1 rehearsal; no downloads or live models.")
 
+PROCESS_INSPECTION_DENIED = (
+    "Host process inspection permission denied; cannot enforce Phase 5 resource limits. "
+    "Run stopped. Process inspection permission is required to retry."
+)
+
+
+class ProcessInspectionDenied(RuntimeError):
+    """The supervisor cannot enforce limits because process inspection was denied."""
+
 
 def load_spec(path: Path) -> Phase5Input:
     _outside_git(path.resolve())
@@ -104,11 +113,14 @@ def supervise(path: Path) -> dict:
         try:
             while process.poll() is None:
                 memory = 0
-                with suppress(psutil.NoSuchProcess):
-                    parent = psutil.Process(process.pid)
-                    for item in [parent, *parent.children(recursive=True)]:
-                        with suppress(psutil.NoSuchProcess):
-                            memory += item.memory_info().rss
+                try:
+                    with suppress(psutil.NoSuchProcess):
+                        parent = psutil.Process(process.pid)
+                        for item in [parent, *parent.children(recursive=True)]:
+                            with suppress(psutil.NoSuchProcess):
+                                memory += item.memory_info().rss
+                except (psutil.AccessDenied, PermissionError):
+                    raise ProcessInspectionDenied(PROCESS_INSPECTION_DENIED) from None
                 disk = 0
                 for entry in spec.output.rglob("*"):
                     # Atomic stage publication can rename files during a measurement.
@@ -150,6 +162,10 @@ def supervise(path: Path) -> dict:
 def run(path: Path):
     try:
         typer.echo(json.dumps(supervise(path)))
+    except ProcessInspectionDenied:
+        # Only a fixed diagnostic is safe to expose; exception details can contain private data.
+        typer.echo("Private Phase 5 failed: " + PROCESS_INSPECTION_DENIED, err=True)
+        raise typer.Exit(code=1) from None
     except Exception as exc:
         typer.echo("Private Phase 5 failed: " + type(exc).__name__, err=True)
         raise typer.Exit(code=1) from None

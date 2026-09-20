@@ -21,6 +21,12 @@ to inspect local process memory. It enforces a 3 GiB process-family RSS cap, 2 G
 one-hour runtime cap, 25 GiB free-disk reserve and 256 MiB minimum live available memory. It starts
 with a controlled environment, disabled tracing and no inherited credentials.
 
+If the host denies process inspection, the supervisor stops the worker and reports
+`Host process inspection permission denied` rather than a resource-threshold failure.
+This means required monitoring was unavailable, not that a measured limit was exceeded.
+Retry requires an execution environment that permits process inspection; the limits remain
+mandatory. The diagnostic does not expose process names, IDs, paths or raw host errors.
+
 ## Integrity and representation
 
 - Original input fingerprints, annotation input/output checksums, resource manifest identity and
