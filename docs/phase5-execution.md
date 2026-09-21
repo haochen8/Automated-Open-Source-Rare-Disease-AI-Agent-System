@@ -29,6 +29,28 @@ mandatory. The diagnostic does not expose process names, IDs, paths or raw host 
 
 ## Integrity and representation
 
+When resume rejects a changed identity, the diagnostic names only fixed input or provenance
+categories, such as the phenotype document fingerprint, original index path identity, HPO resource
+manifest identity, source-code identity or dataset revision identity. Fingerprints still include
+checksum, size and modification time; even a timestamp-only change prevents resume. Path identity
+changes also prevent resume when file contents are identical. Paths, basenames, metadata values,
+run ID values and checksums are never included in these diagnostics.
+
+A mismatch requires a fresh run in a new output directory with matching verified annotation
+provenance. Preserve the old journal and prepared stages; do not edit their identities to force
+resume. An annotation source checksum mismatch is reported before preparation or stage reuse.
+The full configuration hash remains authoritative; differences that cannot be classified use a
+generic configuration/resource identity diagnostic and still fail closed. Categories explain
+observed differences, not whether the old or current metadata is scientifically correct.
+
+The supervised CLI displays the same fixed-label diagnostic. Its local failure receipt, beside
+the run directory at `phase5-<invocation_id>-failure.json`, contains allowlisted `identity_mismatch`
+codes alongside the existing exception-class and frame records. Each supervisor invocation passes
+a fresh random UUID to its worker and accepts only a receipt with that same invocation identity.
+Sibling outputs sharing a run ID and repeated invocations therefore use separate receipts.
+Missing or mismatched receipts retain a generic identity refusal. Unrelated failures retain their
+generic private diagnostics. No raw exception message is passed through the worker receipt or CLI.
+
 - Original input fingerprints, annotation input/output checksums, resource manifest identity and
   source-code checksum bind each run. A changed configuration/input cannot silently resume an old run.
 - Streaming reconciliation checks original alternate ordinals and projected GT/GQ values against

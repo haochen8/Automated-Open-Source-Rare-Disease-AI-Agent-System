@@ -4,19 +4,27 @@ import os
 import sys
 import traceback
 from pathlib import Path
+from uuid import UUID
 
 from rare_disease_agent.resource_management import atomic_json
 from rare_disease_agent.workflows.authorized import _outside_git
 from rare_disease_agent.workflows.phase5 import phase5_run
 from rare_disease_agent.workflows.phase5_cli import load_spec
+from rare_disease_agent.workflows.phase5_diagnostics import (
+    WORKER_IDENTITY_MISMATCH,
+    Phase5IdentityMismatch,
+)
 
 if __name__ == "__main__":
     os.umask(0o077)
     spec = None
     try:
+        # Canonical UUID hex is safe in a filename; never use an unchecked command argument.
+        invocation_id = UUID(sys.argv[2]).hex
         spec = load_spec(Path(sys.argv[1]))
         phase5_run(spec)
     except Exception as exc:
+        diagnostic = exc.codes if isinstance(exc, Phase5IdentityMismatch) else None
         if spec is not None:
             _outside_git(spec.output.resolve())
             chain = []
@@ -35,5 +43,8 @@ if __name__ == "__main__":
                     }
                 )
                 exc = exc.__context__
-            atomic_json(spec.output.parent / (spec.run_id + "-failure.json"), {"errors": chain})
-        sys.exit(1)
+            receipt = {"invocation_id": invocation_id, "errors": chain}
+            if diagnostic is not None:
+                receipt["identity_mismatch"] = Phase5IdentityMismatch(diagnostic).codes
+            atomic_json(spec.output.parent / ("phase5-" + invocation_id + "-failure.json"), receipt)
+        sys.exit(WORKER_IDENTITY_MISMATCH if diagnostic is not None else 1)

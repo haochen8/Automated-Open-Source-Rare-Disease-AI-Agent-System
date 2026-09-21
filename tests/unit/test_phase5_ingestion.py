@@ -123,13 +123,12 @@ def test_explicit_hpo_extraction_refuses_ambiguous_negation(tmp_path):
         extract_explicit_hpo(path)
 
 
-@pytest.mark.parametrize("has_high_impact", [True, False])
-def test_phase5_synthetic_end_to_end_resume_and_input_change(tmp_path, has_high_impact):
+def phase5_fixture(tmp_path, has_high_impact=True):
     from test_phase4_resources import normalized_fixture
 
     from rare_disease_agent.resource_management import atomic_json, sha256
     from rare_disease_agent.resource_management.hpo import normalize_hpo
-    from rare_disease_agent.workflows.phase5 import Phase5Input, phase5_run
+    from rare_disease_agent.workflows.phase5 import Phase5Input
 
     manager, locks = normalized_fixture(tmp_path)
     hpo = tmp_path / "hpo"
@@ -167,7 +166,7 @@ def test_phase5_synthetic_end_to_end_resume_and_input_change(tmp_path, has_high_
             "authorized_scope": {"operations": [{"reference_sha256": "a" * 64}]},
         },
     )
-    spec = Phase5Input(
+    return Phase5Input(
         original_vcf=original,
         original_index=index,
         phenotype_docx=document,
@@ -178,6 +177,14 @@ def test_phase5_synthetic_end_to_end_resume_and_input_change(tmp_path, has_high_
         confirmed_local_research_use=True,
         run_id="synthetic-phase5",
     )
+
+
+@pytest.mark.parametrize("has_high_impact", [True, False])
+def test_phase5_synthetic_end_to_end_resume_and_input_change(tmp_path, has_high_impact):
+    from rare_disease_agent.resource_management import sha256
+    from rare_disease_agent.workflows.phase5 import phase5_run
+
+    spec = phase5_fixture(tmp_path, has_high_impact)
     with pytest.raises(RuntimeError, match="InterruptedError"):
         phase5_run(spec, interrupt_after="prepare")
     result = phase5_run(spec)
@@ -207,8 +214,8 @@ def test_phase5_synthetic_end_to_end_resume_and_input_change(tmp_path, has_high_
         (unknown_spec.output / "deliverables" / "sanitized_metrics.json").read_text()
     )
     assert unknown_metrics["sample_phenotype_linkage_confirmed"] is False
-    document.write_bytes(b"changed synthetic input")
-    with pytest.raises(RuntimeError):
+    spec.phenotype_docx.write_bytes(b"changed synthetic input")
+    with pytest.raises(RuntimeError, match="phenotype document fingerprint.*fresh run"):
         phase5_run(spec)
 
 

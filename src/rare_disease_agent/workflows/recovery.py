@@ -42,6 +42,15 @@ class RunJournal(BaseModel):
     stages: dict[str, StageRecord] = Field(default_factory=dict)
 
 
+class RunIdentityMismatch(ValueError):
+    """Identity rejection with private comparison context, never interpolated into text."""
+
+    def __init__(self, previous_configuration: dict, *, run_id_changed: bool):
+        super().__init__("Run ID or configuration/resource identity mismatch")
+        self.previous_configuration = previous_configuration
+        self.run_id_changed = run_id_changed
+
+
 class RestartableRun:
     """Single-writer stage transaction. Incomplete stage work is recomputed on resume."""
 
@@ -53,7 +62,9 @@ class RestartableRun:
         if self.path.exists():
             self.journal = RunJournal.model_validate_json(self.path.read_text())
             if self.journal.run_id != run_id or self.journal.configuration_hash != digest:
-                raise ValueError("Run ID or configuration/resource identity mismatch")
+                raise RunIdentityMismatch(
+                    self.journal.configuration, run_id_changed=self.journal.run_id != run_id
+                )
             self.verify()
         else:
             if any(path.name != ".run.lock" for path in directory.iterdir()):

@@ -1,12 +1,18 @@
-"""Synthetic supervisor regressions; no worker or host process inspection is performed."""
+"""Synthetic supervisor regressions; worker receipt tests mock scientific execution."""
 
 import json
+import os
+import runpy
+from pathlib import Path
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from typer.testing import CliRunner
 
+from rare_disease_agent.workflows import phase5
 from rare_disease_agent.workflows import phase5_cli as cli
+from rare_disease_agent.workflows.phase5_diagnostics import Phase5IdentityMismatch
 
 
 @pytest.fixture
@@ -35,12 +41,16 @@ def supervision(tmp_path, monkeypatch):
     output = tmp_path / "output"
     config = tmp_path / "synthetic.json"
     config.write_text("{}")
+    invocation_id = UUID(int=1).hex
+    monkeypatch.setattr(cli, "uuid4", lambda: UUID(invocation_id))
     killed = []
     child = SimpleNamespace(memory_info=lambda: SimpleNamespace(rss=1024))
     parent = SimpleNamespace(
         children=lambda recursive: [child], memory_info=lambda: SimpleNamespace(rss=2048)
     )
-    monkeypatch.setattr(cli, "load_spec", lambda path: SimpleNamespace(output=output))
+    monkeypatch.setattr(
+        cli, "load_spec", lambda path: SimpleNamespace(output=output, run_id="synthetic")
+    )
     monkeypatch.setattr(cli.subprocess, "Popen", lambda *args, **kwargs: process)
     monkeypatch.setattr(cli.psutil, "Process", lambda pid: parent)
     monkeypatch.setattr(cli.psutil, "disk_usage", lambda path: SimpleNamespace(free=30 * 1024**3))
@@ -51,7 +61,14 @@ def supervision(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(cli.time, "monotonic", lambda: 0)
     return SimpleNamespace(
-        process=process, parent=parent, child=child, config=config, output=output, killed=killed
+        process=process,
+        parent=parent,
+        child=child,
+        config=config,
+        output=output,
+        killed=killed,
+        invocation_id=invocation_id,
+        receipt_path=output.parent / ("phase5-" + invocation_id + "-failure.json"),
     )
 
 
@@ -141,3 +158,132 @@ def test_unrelated_permission_error_keeps_generic_private_diagnostic(supervision
     assert result.output == "Private Phase 5 failed: PermissionError\n"
     assert supervision.killed == [(123, cli.signal.SIGKILL)]
     assert supervision.process.waits == 1
+
+
+@pytest.mark.parametrize(
+    "payload,expected_codes",
+    [
+        ({"identity_mismatch": ["inputs.challenge_phenotype"]}, ["inputs.challenge_phenotype"]),
+        ({"identity_mismatch": ["SYNTHETIC_PRIVATE_SENTINEL"]}, ["configuration"]),
+        ({"identity_mismatch": [{"SYNTHETIC_PRIVATE_SENTINEL": 1}]}, ["configuration"]),
+        ({"identity_mismatch": "SYNTHETIC_PRIVATE_SENTINEL"}, ["configuration"]),
+        ({"identity_mismatch": ["code_sha256"] * 100}, ["configuration"]),
+        (["SYNTHETIC_PRIVATE_SENTINEL"], ["configuration"]),
+        (None, ["configuration"]),
+    ],
+)
+def test_cli_renders_only_allowlisted_worker_codes(supervision, payload, expected_codes):
+    state = supervision
+    state.process.returncode = cli.WORKER_IDENTITY_MISMATCH
+    if payload is not None:
+        if isinstance(payload, dict):
+            payload = {**payload, "invocation_id": state.invocation_id}
+        state.receipt_path.write_text(json.dumps(payload))
+    result = CliRunner().invoke(cli.app, ["run", str(state.config)])
+    assert result.exit_code == 1
+    assert result.output == str(Phase5IdentityMismatch(expected_codes)) + "\n"
+    assert "SYNTHETIC_PRIVATE_SENTINEL" not in result.output
+    assert str(state.output.parent) not in result.output
+    assert not list(state.output.glob("supervision-*.json"))
+
+
+@pytest.mark.parametrize("receipt", ["invalid JSON", " " * 65537, "\udcff"])
+def test_unreadable_worker_receipt_has_safe_fallback(supervision, receipt):
+    supervision.process.returncode = cli.WORKER_IDENTITY_MISMATCH
+    supervision.receipt_path.write_bytes(receipt.encode("utf-8", errors="surrogateescape"))
+    result = CliRunner().invoke(cli.app, ["run", str(supervision.config)])
+    assert result.exit_code == 1
+    assert result.output == str(Phase5IdentityMismatch(None)) + "\n"
+
+
+def test_unrelated_worker_failure_does_not_reuse_stale_identity_diagnostic(supervision):
+    supervision.process.returncode = 1
+    supervision.receipt_path.write_text(
+        json.dumps(
+            {"invocation_id": supervision.invocation_id, "identity_mismatch": ["code_sha256"]}
+        )
+    )
+    result = CliRunner().invoke(cli.app, ["run", str(supervision.config)])
+    assert result.exit_code == 1
+    assert result.output == "Private Phase 5 failed: RuntimeError\n"
+
+
+@pytest.mark.parametrize("invocation_id", [None, UUID(int=2).hex])
+def test_mismatched_receipt_invocation_keeps_generic_refusal(supervision, invocation_id):
+    supervision.process.returncode = cli.WORKER_IDENTITY_MISMATCH
+    supervision.receipt_path.write_text(
+        json.dumps({"invocation_id": invocation_id, "identity_mismatch": ["hpo_manifest_sha256"]})
+    )
+    result = CliRunner().invoke(cli.app, ["run", str(supervision.config)])
+    assert result.exit_code == 1
+    assert result.output == str(Phase5IdentityMismatch(None)) + "\n"
+
+
+@pytest.mark.parametrize("same_output", [False, True])
+def test_interleaved_sibling_workers_keep_their_own_diagnostics(tmp_path, monkeypatch, same_output):
+    """Run the real receipt writers in a forced A-write, B-write, A-read interleaving."""
+    first_config = tmp_path / "first.json"
+    second_config = tmp_path / "second.json"
+    specs = {
+        first_config: SimpleNamespace(output=tmp_path / "first", run_id="synthetic-shared"),
+        second_config: SimpleNamespace(
+            output=tmp_path / ("first" if same_output else "second"), run_id="synthetic-shared"
+        ),
+    }
+    expected = {
+        first_config: ["inputs.challenge_phenotype"],
+        second_config: ["hpo_manifest_sha256"],
+    }
+    observed = {}
+    commands = []
+    monkeypatch.setattr(cli, "load_spec", lambda path: specs[path])
+
+    def fail(spec):
+        config = next(path for path, item in specs.items() if item is spec)
+        raise Phase5IdentityMismatch(expected[config])
+
+    monkeypatch.setattr(phase5, "phase5_run", fail)
+
+    class Process:
+        returncode = cli.WORKER_IDENTITY_MISMATCH
+
+        def __init__(self, command, **kwargs):
+            self.config = Path(command[3])
+            commands.append(command)
+            # Execute worker receipt publication without launching a process or doing science.
+            previous_umask = os.umask(0o077)
+            try:
+                with monkeypatch.context() as worker_patch:
+                    worker_patch.setattr(cli.sys, "argv", command[2:])
+                    with pytest.raises(SystemExit) as caught:
+                        runpy.run_module(command[2], run_name="__main__")
+                    assert caught.value.code == self.returncode
+            finally:
+                os.umask(previous_umask)
+
+        def __enter__(self):
+            if self.config == first_config:
+                # B publishes after A, but before A's supervisor reads its receipt.
+                with pytest.raises(Phase5IdentityMismatch) as caught:
+                    cli.supervise(second_config)
+                observed[second_config] = caught.value.codes
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self):
+            return self.returncode
+
+    monkeypatch.setattr(cli.subprocess, "Popen", Process)
+    with pytest.raises(Phase5IdentityMismatch) as caught:
+        cli.supervise(first_config)
+    observed[first_config] = caught.value.codes
+    assert len(commands) == 2
+    assert observed == expected
+    assert commands[0][4] != commands[1][4]
+    assert len(list(tmp_path.glob("phase5-*-failure.json"))) == 2
+    assert all(not list(spec.output.iterdir()) for spec in specs.values())

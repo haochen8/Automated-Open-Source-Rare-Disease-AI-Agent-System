@@ -30,7 +30,11 @@ from rare_disease_agent.workflows.authorized import (
     _outside_git,
     authorized_dry_run,
 )
-from rare_disease_agent.workflows.recovery import RestartableRun
+from rare_disease_agent.workflows.phase5_diagnostics import (
+    Phase5IdentityMismatch,
+    describe_mismatch,
+)
+from rare_disease_agent.workflows.recovery import RestartableRun, RunIdentityMismatch
 
 
 class Phase5Input(BaseModel):
@@ -116,11 +120,10 @@ def _run(spec: Phase5Input, *, interrupt_after: str | None = None) -> dict:
     }
     rehearsal = spec.annotation_rehearsal
     prior = json.loads((rehearsal / "run_manifest.json").read_text())
-    if (
-        prior["status"] != "completed"
-        or prior["source_sha256"] != fingerprints["challenge_track1_vcf"]["sha256"]
-    ):
+    if prior["status"] != "completed":
         raise ValueError("Annotation rehearsal does not match original input")
+    if prior["source_sha256"] != fingerprints["challenge_track1_vcf"]["sha256"]:
+        raise Phase5IdentityMismatch(["annotation_source"])
     integrity = json.loads((rehearsal / "integrity_manifest.json").read_text())
     for name, digest in integrity.items():
         if Path(name).name != name or sha256(rehearsal / name) != digest:
@@ -153,7 +156,10 @@ def _run(spec: Phase5Input, *, interrupt_after: str | None = None) -> dict:
         "scope": "previously annotated bounded subset only",
         "specification": spec.model_dump(mode="json"),
     }
-    runner = RestartableRun(spec.output, run_id=spec.run_id, configuration=configuration)
+    try:
+        runner = RestartableRun(spec.output, run_id=spec.run_id, configuration=configuration)
+    except RunIdentityMismatch as exc:
+        raise describe_mismatch(exc, configuration) from None
 
     def prepare(path):
         metrics = verify_split_genotypes(rehearsal / "subset.vcf", rehearsal / "normalized.vcf")
@@ -352,6 +358,9 @@ def phase5_run(spec: Phase5Input, *, interrupt_after: str | None = None) -> dict
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
             return _run(spec, interrupt_after=interrupt_after)
+        except Phase5IdentityMismatch as exc:
+            # Reconstruct from fixed codes rather than forwarding arbitrary exception text.
+            raise Phase5IdentityMismatch(exc.codes) from None
         except Exception as exc:
             # Do not forward patient-bearing exceptions, rows, identifiers or file paths.
             raise RuntimeError("Private Phase 5 stage failed: " + type(exc).__name__) from None

@@ -10,6 +10,7 @@ import sys
 import time
 from contextlib import suppress
 from pathlib import Path
+from uuid import uuid4
 
 import psutil
 import typer
@@ -18,6 +19,10 @@ from rare_disease_agent.resource_management import atomic_json, sha256
 from rare_disease_agent.workflows.authorized import _outside_git
 from rare_disease_agent.workflows.benchmark import select_autosomal_benchmark
 from rare_disease_agent.workflows.phase5 import Phase5Input
+from rare_disease_agent.workflows.phase5_diagnostics import (
+    WORKER_IDENTITY_MISMATCH,
+    Phase5IdentityMismatch,
+)
 
 app = typer.Typer(help="Private bounded Track 1 rehearsal; no downloads or live models.")
 
@@ -87,11 +92,14 @@ def supervise(path: Path) -> dict:
     _outside_git(spec.output.resolve())
     spec.output.mkdir(parents=True, exist_ok=True, mode=0o700)
     root = Path(__file__).resolve().parents[2]
+    invocation_id = uuid4().hex
+    receipt_path = spec.output.parent / ("phase5-" + invocation_id + "-failure.json")
     command = [
         sys.executable,
         "-m",
         "rare_disease_agent.workflows.phase5_worker",
         str(path.resolve()),
+        invocation_id,
     ]
     environment = {
         "PATH": str(Path(sys.executable).parent) + os.pathsep + os.defpath,
@@ -137,6 +145,16 @@ def supervise(path: Path) -> dict:
                 ):
                     raise RuntimeError("Private rehearsal resource boundary reached")
                 time.sleep(0.25)
+            if process.returncode == WORKER_IDENTITY_MISMATCH:
+                codes = None
+                # Bind the receipt to this invocation, including when sibling runs share an ID.
+                # Read a bounded receipt and render only known codes, never its exception text.
+                with suppress(OSError, ValueError, TypeError):
+                    with receipt_path.open() as receipt:
+                        payload = json.loads(receipt.read(65537))
+                    if isinstance(payload, dict) and payload.get("invocation_id") == invocation_id:
+                        codes = payload.get("identity_mismatch")
+                raise Phase5IdentityMismatch(codes)
             if process.returncode:
                 raise RuntimeError("Private rehearsal failed; inspect sanitized local stage status")
         except BaseException:
@@ -162,6 +180,9 @@ def supervise(path: Path) -> dict:
 def run(path: Path):
     try:
         typer.echo(json.dumps(supervise(path)))
+    except Phase5IdentityMismatch as exc:
+        typer.echo(str(Phase5IdentityMismatch(exc.codes)), err=True)
+        raise typer.Exit(code=1) from None
     except ProcessInspectionDenied:
         # Only a fixed diagnostic is safe to expose; exception details can contain private data.
         typer.echo("Private Phase 5 failed: " + PROCESS_INSPECTION_DENIED, err=True)
