@@ -37,6 +37,40 @@ FRESH_RUN = (
     "Do not edit the existing journal or reuse its prepared stages."
 )
 WORKER_IDENTITY_MISMATCH = 2
+WORKER_STAGE_INTEGRITY = 3
+STAGE_LABELS = {
+    "prepare": "preparation (prepare)",
+    "ingest": "ingestion (ingest)",
+    "analysis": "analysis",
+    "deliverables": "deliverables",
+    "unknown": "unidentified committed stage",
+}
+STAGE_REASONS = {
+    "missing": "persisted artifacts are missing",
+    "inventory": "persisted artifact inventory is inconsistent",
+    "checksum": "persisted artifacts failed checksum validation",
+    "unreadable": "persisted artifacts could not be read for integrity validation",
+    "invalid_identity": "committed stage identity is invalid",
+    "unknown": "persisted artifacts could not be validated for reuse",
+}
+
+
+class Phase5StageIntegrityError(RuntimeError):
+    """A fixed-label refusal, including when receipt fields are malformed or unknown."""
+
+    def __init__(self, stage=None, reason=None):
+        self.stage = stage if isinstance(stage, str) and stage in STAGE_LABELS else "unknown"
+        self.reason = reason if isinstance(reason, str) and reason in STAGE_REASONS else "unknown"
+        super().__init__(
+            "Phase 5 committed stage cannot be safely reused: "
+            + STAGE_LABELS[self.stage]
+            + "; "
+            + STAGE_REASONS[self.reason]
+            + ". Resume stopped. "
+            + FRESH_RUN
+            + " Preserve the existing run for local inspection; "
+            "do not delete or regenerate committed stages in place."
+        )
 
 
 class Phase5IdentityMismatch(RuntimeError):

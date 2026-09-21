@@ -32,9 +32,14 @@ from rare_disease_agent.workflows.authorized import (
 )
 from rare_disease_agent.workflows.phase5_diagnostics import (
     Phase5IdentityMismatch,
+    Phase5StageIntegrityError,
     describe_mismatch,
 )
-from rare_disease_agent.workflows.recovery import RestartableRun, RunIdentityMismatch
+from rare_disease_agent.workflows.recovery import (
+    CommittedStageIntegrityError,
+    RestartableRun,
+    RunIdentityMismatch,
+)
 
 
 class Phase5Input(BaseModel):
@@ -361,6 +366,8 @@ def phase5_run(spec: Phase5Input, *, interrupt_after: str | None = None) -> dict
         except Phase5IdentityMismatch as exc:
             # Reconstruct from fixed codes rather than forwarding arbitrary exception text.
             raise Phase5IdentityMismatch(exc.codes) from None
+        except CommittedStageIntegrityError as exc:
+            raise Phase5StageIntegrityError(exc.stage, exc.reason) from None
         except Exception as exc:
             # Do not forward patient-bearing exceptions, rows, identifiers or file paths.
             raise RuntimeError("Private Phase 5 stage failed: " + type(exc).__name__) from None

@@ -51,6 +51,15 @@ class RunIdentityMismatch(ValueError):
         self.run_id_changed = run_id_changed
 
 
+class CommittedStageIntegrityError(ValueError):
+    """Private stage context for callers to translate through their own fixed labels."""
+
+    def __init__(self, stage: str, reason: str):
+        super().__init__("Committed stage artifacts cannot be safely reused")
+        self.stage = stage
+        self.reason = reason
+
+
 class RestartableRun:
     """Single-writer stage transaction. Incomplete stage work is recomputed on resume."""
 
@@ -96,15 +105,24 @@ class RestartableRun:
     def verify(self):
         for name, stage in self.journal.stages.items():
             if not name.isidentifier():
-                raise ValueError("Invalid stage identity")
+                raise CommittedStageIntegrityError(name, "invalid_identity")
             base = self.directory / name
-            observed = {
-                str(path.relative_to(base)): sha256(path)
-                for path in base.rglob("*")
-                if path.is_file()
-            }
+            try:
+                observed = {
+                    str(path.relative_to(base)): sha256(path)
+                    for path in base.rglob("*")
+                    if path.is_file()
+                }
+            except OSError:
+                raise CommittedStageIntegrityError(name, "unreadable") from None
             if observed != stage.outputs:
-                raise ValueError("Partial or modified stage artifacts")
+                if stage.outputs.keys() - observed.keys():
+                    reason = "missing"
+                elif observed.keys() - stage.outputs.keys():
+                    reason = "inventory"
+                else:
+                    reason = "checksum"
+                raise CommittedStageIntegrityError(name, reason)
 
     def stage(self, name: str, operation: Callable[[Path], None]) -> Path:
         if not name.isidentifier():

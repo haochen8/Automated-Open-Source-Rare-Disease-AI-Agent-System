@@ -3,6 +3,7 @@
 import copy
 import json
 import os
+import shutil
 import subprocess
 import sys
 import traceback
@@ -17,11 +18,18 @@ from rare_disease_agent.workflows import phase5
 from rare_disease_agent.workflows.phase5_diagnostics import (
     IDENTITY_FIELDS,
     LABELS,
+    STAGE_LABELS,
     WORKER_IDENTITY_MISMATCH,
+    WORKER_STAGE_INTEGRITY,
     Phase5IdentityMismatch,
+    Phase5StageIntegrityError,
     describe_mismatch,
 )
-from rare_disease_agent.workflows.recovery import RestartableRun, RunIdentityMismatch
+from rare_disease_agent.workflows.recovery import (
+    CommittedStageIntegrityError,
+    RestartableRun,
+    RunIdentityMismatch,
+)
 
 
 def snapshot(directory):
@@ -146,11 +154,10 @@ def test_unchanged_preparation_resumes_and_changed_input_can_start_fresh(prepare
     assert snapshot(prepared.output) == before
 
 
-@pytest.mark.parametrize("corruption", ["annotation", "prepared_stage", "journal"])
+@pytest.mark.parametrize("corruption", ["annotation", "journal"])
 def test_integrity_failures_remain_generic_and_do_not_rewrite_stages(prepared, corruption):
     target = {
         "annotation": prepared.annotation_rehearsal / "annotated.vcf",
-        "prepared_stage": prepared.output / "prepare" / "phenotype.json",
         "journal": prepared.output / "run.json",
     }[corruption]
     target.write_text("SYNTHETIC_PRIVATE_SENTINEL")
@@ -160,6 +167,162 @@ def test_integrity_failures_remain_generic_and_do_not_rewrite_stages(prepared, c
     assert not isinstance(caught.value, Phase5IdentityMismatch)
     assert str(caught.value).startswith("Private Phase 5 stage failed:")
     assert "SYNTHETIC_PRIVATE_SENTINEL" not in str(caught.value)
+    assert snapshot(prepared.output) == before
+
+
+@pytest.mark.parametrize("stage", ["prepare", "ingest", "analysis", "deliverables"])
+@pytest.mark.parametrize("corruption", ["missing", "directory", "checksum", "inventory"])
+def test_committed_stage_refusal_is_specific_private_and_immutable(prepared, stage, corruption):
+    # Commit small synthetic artifacts through the real journal, without scientific execution.
+    configuration = json.loads((prepared.output / "run.json").read_text())["configuration"]
+    runner = RestartableRun(prepared.output, run_id=prepared.run_id, configuration=configuration)
+    if stage != "prepare":
+        runner.stage(stage, lambda path: (path / "artifact.json").write_text("synthetic"))
+    directory = prepared.output / stage
+    target = next(path for path in directory.rglob("*") if path.is_file())
+    digest = sha256(target)
+    if corruption == "missing":
+        target.unlink()
+    elif corruption == "directory":
+        shutil.rmtree(directory)
+    elif corruption == "checksum":
+        target.write_text("SYNTHETIC_PRIVATE_SENTINEL")
+    else:
+        (directory / "SYNTHETIC_PRIVATE_SENTINEL").write_text("SYNTHETIC_PRIVATE_SENTINEL")
+    before = snapshot(prepared.output)
+    with pytest.raises(Phase5StageIntegrityError) as caught:
+        phase5.phase5_run(prepared)
+    error = caught.value
+    assert error.stage == stage
+    assert error.reason == ("missing" if corruption == "directory" else corruption)
+    assert STAGE_LABELS[stage] in str(error)
+    assert "fresh run in a new output directory is required" in str(error)
+    assert "do not delete or regenerate committed stages in place" in str(error)
+    rendered = "".join(traceback.format_exception(error))
+    for private in ("SYNTHETIC_PRIVATE_SENTINEL", str(prepared.output.parent), digest):
+        assert private not in rendered
+    assert error.__suppress_context__
+    assert snapshot(prepared.output) == before
+
+
+def test_committed_read_failure_hides_underlying_os_error(prepared, monkeypatch):
+    from rare_disease_agent.workflows import recovery
+
+    before = snapshot(prepared.output)
+
+    def denied(path):
+        raise PermissionError(13, "SYNTHETIC_PRIVATE_SENTINEL", str(path))
+
+    monkeypatch.setattr(recovery, "sha256", denied)
+    with pytest.raises(Phase5StageIntegrityError) as caught:
+        phase5.phase5_run(prepared)
+    assert (caught.value.stage, caught.value.reason) == ("prepare", "unreadable")
+    rendered = "".join(traceback.format_exception(caught.value))
+    assert "SYNTHETIC_PRIVATE_SENTINEL" not in rendered
+    assert str(prepared.output.parent) not in rendered
+    assert snapshot(prepared.output) == before
+
+
+def test_corrupt_committed_stage_requires_fresh_output_and_preserves_identity_checks(prepared):
+    (prepared.output / "prepare" / "phenotype.json").unlink()
+    before = snapshot(prepared.output)
+    prepared.original_index.write_text("changed synthetic index")
+    # Identity refusal must still win even when a committed stage is also unusable.
+    with pytest.raises(Phase5IdentityMismatch, match="original index fingerprint"):
+        phase5.phase5_run(prepared)
+    fresh = prepared.model_copy(update={"output": prepared.output.parent / "fresh"})
+    with pytest.raises(RuntimeError, match="InterruptedError"):
+        phase5.phase5_run(fresh, interrupt_after="prepare")
+    assert (fresh.output / "prepare" / "phenotype.json").is_file()
+    assert snapshot(prepared.output) == before
+
+
+def test_phase5_stage_recheck_reports_corruption_after_runner_construction(prepared, monkeypatch):
+    original = RestartableRun.stage
+    before = None
+
+    def changed_stage(runner, name, operation):
+        nonlocal before
+        (prepared.output / "prepare" / "phenotype.json").unlink()
+        before = snapshot(prepared.output)
+        return original(runner, name, operation)
+
+    monkeypatch.setattr(RestartableRun, "stage", changed_stage)
+    with pytest.raises(Phase5StageIntegrityError) as caught:
+        phase5.phase5_run(prepared)
+    assert (caught.value.stage, caught.value.reason) == ("prepare", "missing")
+    assert snapshot(prepared.output) == before
+
+
+@pytest.mark.parametrize("name", ["SYNTHETIC_PRIVATE_SENTINEL", "../SYNTHETIC_PRIVATE_SENTINEL"])
+def test_untrusted_committed_stage_name_is_not_disclosed(prepared, name):
+    journal = prepared.output / "run.json"
+    payload = json.loads(journal.read_text())
+    payload["stages"][name] = payload["stages"].pop("prepare")
+    journal.write_text(json.dumps(payload))
+    before = snapshot(prepared.output)
+    with pytest.raises(Phase5StageIntegrityError) as caught:
+        phase5.phase5_run(prepared)
+    assert caught.value.stage == "unknown"
+    assert "SYNTHETIC_PRIVATE_SENTINEL" not in str(caught.value)
+    assert snapshot(prepared.output) == before
+
+
+@pytest.mark.parametrize("entry", ["constructor", "stage", "complete"])
+def test_recovery_validates_all_committed_stages_before_reuse(tmp_path, entry):
+    runner = RestartableRun(tmp_path, run_id="synthetic", configuration={})
+    runner.stage("prepare", lambda path: (path / "first").write_text("synthetic"))
+    runner.stage("ingest", lambda path: (path / "second").write_text("synthetic"))
+    (tmp_path / "ingest" / "second").unlink()
+    before = snapshot(tmp_path)
+
+    def must_not_run(path):
+        pytest.fail("A committed stage must never be regenerated")
+
+    with pytest.raises(CommittedStageIntegrityError) as caught:
+        if entry == "constructor":
+            RestartableRun(tmp_path, run_id="synthetic", configuration={})
+        elif entry == "stage":
+            runner.stage("prepare", must_not_run)
+        else:
+            runner.complete()
+    assert (caught.value.stage, caught.value.reason) == ("ingest", "missing")
+    assert snapshot(tmp_path) == before
+
+
+def test_worker_publishes_only_safe_stage_diagnostic(prepared, tmp_path):
+    (prepared.output / "prepare" / "phenotype.json").write_text("SYNTHETIC_PRIVATE_SENTINEL")
+    before = snapshot(prepared.output)
+    config = tmp_path / "SYNTHETIC_PRIVATE_SENTINEL.json"
+    config.write_text(prepared.model_dump_json())
+    invocation_id = uuid4().hex
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "rare_disease_agent.workflows.phase5_worker",
+            str(config),
+            invocation_id,
+        ],
+        env={
+            "PATH": os.defpath,
+            "PYTHONPATH": str(Path(phase5.__file__).resolve().parents[2]),
+            "LANGSMITH_TRACING": "false",
+            "LANGCHAIN_TRACING_V2": "false",
+        },
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode == WORKER_STAGE_INTEGRITY
+    assert result.stdout == result.stderr == b""
+    receipt = (prepared.output.parent / ("phase5-" + invocation_id + "-failure.json")).read_text()
+    payload = json.loads(receipt)
+    assert payload["invocation_id"] == invocation_id
+    assert payload["stage_integrity"] == {"stage": "prepare", "reason": "checksum"}
+    assert "identity_mismatch" not in payload
+    for private in ("SYNTHETIC_PRIVATE_SENTINEL", str(tmp_path), sha256(config)):
+        assert private not in receipt
     assert snapshot(prepared.output) == before
 
 

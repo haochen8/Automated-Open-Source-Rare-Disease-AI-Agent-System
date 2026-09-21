@@ -12,7 +12,9 @@ from rare_disease_agent.workflows.phase5 import phase5_run
 from rare_disease_agent.workflows.phase5_cli import load_spec
 from rare_disease_agent.workflows.phase5_diagnostics import (
     WORKER_IDENTITY_MISMATCH,
+    WORKER_STAGE_INTEGRITY,
     Phase5IdentityMismatch,
+    Phase5StageIntegrityError,
 )
 
 if __name__ == "__main__":
@@ -25,6 +27,11 @@ if __name__ == "__main__":
         phase5_run(spec)
     except Exception as exc:
         diagnostic = exc.codes if isinstance(exc, Phase5IdentityMismatch) else None
+        stage_error = (
+            Phase5StageIntegrityError(exc.stage, exc.reason)
+            if isinstance(exc, Phase5StageIntegrityError)
+            else None
+        )
         if spec is not None:
             _outside_git(spec.output.resolve())
             chain = []
@@ -46,5 +53,16 @@ if __name__ == "__main__":
             receipt = {"invocation_id": invocation_id, "errors": chain}
             if diagnostic is not None:
                 receipt["identity_mismatch"] = Phase5IdentityMismatch(diagnostic).codes
+            if stage_error is not None:
+                receipt["stage_integrity"] = {
+                    "stage": stage_error.stage,
+                    "reason": stage_error.reason,
+                }
             atomic_json(spec.output.parent / ("phase5-" + invocation_id + "-failure.json"), receipt)
-        sys.exit(WORKER_IDENTITY_MISMATCH if diagnostic is not None else 1)
+        sys.exit(
+            WORKER_IDENTITY_MISMATCH
+            if diagnostic is not None
+            else WORKER_STAGE_INTEGRITY
+            if stage_error is not None
+            else 1
+        )

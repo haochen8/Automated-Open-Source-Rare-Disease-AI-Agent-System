@@ -51,6 +51,22 @@ Sibling outputs sharing a run ID and repeated invocations therefore use separate
 Missing or mismatched receipts retain a generic identity refusal. Unrelated failures retain their
 generic private diagnostics. No raw exception message is passed through the worker receipt or CLI.
 
+If a committed stage cannot pass artifact validation, resume also stops without rewriting its
+journal or stage artifacts. The diagnostic identifies preparation (`prepare`), ingestion (`ingest`),
+analysis or deliverables using fixed labels, and reports missing artifacts, an inconsistent file
+inventory, a checksum validation failure or inability to read artifacts. These categories describe
+the failed check, not the cause of corruption. Unknown or invalid stage identities never appear
+verbatim. No artifact names, paths, values, contents or checksums are included.
+
+Preserve the existing run for local inspection. A fresh run in a new output directory with matching
+verified annotation provenance is required; do not edit the journal, delete committed stages, or
+regenerate them in place to force resume. Interrupted **uncommitted** stages still follow the normal
+recomputation path. The worker receipt carries only allowlisted `stage_integrity.stage` and
+`stage_integrity.reason` codes for this refusal. The supervisor requires the corresponding worker
+exit status and matching invocation identity; missing, malformed or stale receipts keep a generic
+committed-stage refusal with the same recovery guidance. Input/provenance identity checks remain
+authoritative and run before committed-stage reuse validation.
+
 - Original input fingerprints, annotation input/output checksums, resource manifest identity and
   source-code checksum bind each run. A changed configuration/input cannot silently resume an old run.
 - Streaming reconciliation checks original alternate ordinals and projected GT/GQ values against

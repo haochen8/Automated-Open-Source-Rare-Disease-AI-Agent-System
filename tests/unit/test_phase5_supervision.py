@@ -12,7 +12,10 @@ from typer.testing import CliRunner
 
 from rare_disease_agent.workflows import phase5
 from rare_disease_agent.workflows import phase5_cli as cli
-from rare_disease_agent.workflows.phase5_diagnostics import Phase5IdentityMismatch
+from rare_disease_agent.workflows.phase5_diagnostics import (
+    Phase5IdentityMismatch,
+    Phase5StageIntegrityError,
+)
 
 
 @pytest.fixture
@@ -217,6 +220,78 @@ def test_mismatched_receipt_invocation_keeps_generic_refusal(supervision, invoca
     result = CliRunner().invoke(cli.app, ["run", str(supervision.config)])
     assert result.exit_code == 1
     assert result.output == str(Phase5IdentityMismatch(None)) + "\n"
+
+
+@pytest.mark.parametrize(
+    "diagnostic,stage,reason",
+    [
+        ({"stage": "ingest", "reason": "missing"}, "ingest", "missing"),
+        ({"stage": "analysis", "reason": "checksum"}, "analysis", "checksum"),
+        ({"stage": "deliverables", "reason": "inventory"}, "deliverables", "inventory"),
+        ({"stage": "prepare", "reason": "unreadable"}, "prepare", "unreadable"),
+        ({"stage": "SYNTHETIC_PRIVATE_SENTINEL", "reason": "bad"}, "unknown", "unknown"),
+        ({"stage": ["prepare"], "reason": {"checksum": 1}}, "unknown", "unknown"),
+        ("SYNTHETIC_PRIVATE_SENTINEL", "unknown", "unknown"),
+        (None, "unknown", "unknown"),
+    ],
+)
+def test_cli_renders_only_allowlisted_stage_receipt(supervision, diagnostic, stage, reason):
+    supervision.process.returncode = cli.WORKER_STAGE_INTEGRITY
+    supervision.receipt_path.write_text(
+        json.dumps(
+            {
+                "invocation_id": supervision.invocation_id,
+                "stage_integrity": diagnostic,
+                "errors": [{"message": "SYNTHETIC_PRIVATE_SENTINEL"}],
+                "identity_mismatch": ["code_sha256"],
+            }
+        )
+    )
+    result = CliRunner().invoke(cli.app, ["run", str(supervision.config)])
+    assert result.exit_code == 1
+    assert result.output == str(Phase5StageIntegrityError(stage, reason)) + "\n"
+    assert "SYNTHETIC_PRIVATE_SENTINEL" not in result.output
+    assert str(supervision.output.parent) not in result.output
+    assert not list(supervision.output.glob("supervision-*.json"))
+
+
+@pytest.mark.parametrize(
+    "receipt", ["absent", "malformed", "oversized", "encoding", "stale", "list"]
+)
+def test_invalid_stage_receipt_retains_safe_recovery_guidance(supervision, receipt):
+    supervision.process.returncode = cli.WORKER_STAGE_INTEGRITY
+    payloads = {
+        "malformed": b"invalid JSON",
+        "oversized": b" " * 65537,
+        "encoding": b"\xff",
+        "list": b"[]",
+        "stale": json.dumps(
+            {
+                "invocation_id": UUID(int=2).hex,
+                "stage_integrity": {"stage": "ingest", "reason": "missing"},
+            }
+        ).encode(),
+    }
+    if receipt != "absent":
+        supervision.receipt_path.write_bytes(payloads[receipt])
+    result = CliRunner().invoke(cli.app, ["run", str(supervision.config)])
+    assert result.exit_code == 1
+    assert result.output == str(Phase5StageIntegrityError()) + "\n"
+
+
+def test_unrelated_worker_failure_does_not_use_stage_receipt(supervision):
+    supervision.process.returncode = 1
+    supervision.receipt_path.write_text(
+        json.dumps(
+            {
+                "invocation_id": supervision.invocation_id,
+                "stage_integrity": {"stage": "ingest", "reason": "missing"},
+            }
+        )
+    )
+    result = CliRunner().invoke(cli.app, ["run", str(supervision.config)])
+    assert result.exit_code == 1
+    assert result.output == "Private Phase 5 failed: RuntimeError\n"
 
 
 @pytest.mark.parametrize("same_output", [False, True])
