@@ -119,14 +119,20 @@ def _tool_environment(executable: str) -> dict[str, str]:
     }
 
 
-def bounded_process(command: list[str], job: ToolJob, *, observation: dict | None = None) -> int:
+def bounded_process(
+    command: list[str],
+    job: ToolJob,
+    *,
+    observation: dict | None = None,
+    isolate_process_group: bool = True,
+) -> int:
     """Local child-process supervisor; no shell, network flags or captured patient output."""
     with subprocess.Popen(
         command,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        start_new_session=True,
+        start_new_session=isolate_process_group,
         env=_tool_environment(command[0]),
     ) as process:
         start = time.monotonic()
@@ -164,7 +170,11 @@ def bounded_process(command: list[str], job: ToolJob, *, observation: dict | Non
         except BaseException:
             if process.poll() is None:
                 with suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGKILL)
+                    if isolate_process_group:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    else:
+                        # A supervising batch owns this group and terminates descendants.
+                        process.kill()
             process.wait()
             raise
 
@@ -176,6 +186,7 @@ def execute_job(
     runner: ProcessRunner = bounded_process,
     observed_tool_version: str | None = None,
     observation: dict | None = None,
+    isolate_process_group: bool = True,
 ) -> dict:
     command = job.preview()
     if not authorized:
@@ -218,7 +229,11 @@ def execute_job(
         raise RuntimeError("Insufficient live memory or disk")
     started = time.time()
     try:
-        if observation is not None and runner is bounded_process:
+        if runner is bounded_process and not isolate_process_group:
+            code = bounded_process(
+                command, job, observation=observation, isolate_process_group=False
+            )
+        elif observation is not None and runner is bounded_process:
             code = bounded_process(command, job, observation=observation)
         else:
             code = runner(command, job)

@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import resource
+import shutil
 import time
 from pathlib import Path
 from xml.etree import ElementTree
@@ -129,36 +130,44 @@ def _run(spec: Phase5Input, *, interrupt_after: str | None = None) -> dict:
         raise ValueError("Annotation rehearsal does not match original input")
     if prior["source_sha256"] != fingerprints["challenge_track1_vcf"]["sha256"]:
         raise Phase5IdentityMismatch(["annotation_source"])
-    integrity = json.loads((rehearsal / "integrity_manifest.json").read_text())
-    for name, digest in integrity.items():
-        if Path(name).name != name or sha256(rehearsal / name) != digest:
-            raise ValueError("Annotation rehearsal integrity failed")
-    required = {
-        "subset.vcf",
-        "normalized.vcf",
-        "annotated.vcf",
-        "normalization.receipt.json",
-        "annotation.receipt.json",
-    }
-    if not required <= integrity.keys():
-        raise ValueError("Annotation integrity manifest is incomplete")
-    for name, incoming, outgoing in (
-        ("normalization.receipt.json", "subset.vcf", "normalized.vcf"),
-        ("annotation.receipt.json", "normalized.vcf", "annotated.vcf"),
-    ):
-        receipt = json.loads((rehearsal / name).read_text())
-        if (
-            receipt["input_sha256"] != integrity[incoming]
-            or receipt["output_sha256"] != integrity[outgoing]
-            or receipt["returncode"] != 0
+    assembly = prior.get("format") == "verified-shard-assembly-v1"
+    if assembly:
+        from rare_disease_agent.workflows.assembly import verify_assembly
+
+        prior = verify_assembly(rehearsal)
+    else:
+        integrity = json.loads((rehearsal / "integrity_manifest.json").read_text())
+        for name, digest in integrity.items():
+            if Path(name).name != name or sha256(rehearsal / name) != digest:
+                raise ValueError("Annotation rehearsal integrity failed")
+        required = {
+            "subset.vcf",
+            "normalized.vcf",
+            "annotated.vcf",
+            "normalization.receipt.json",
+            "annotation.receipt.json",
+        }
+        if not required <= integrity.keys():
+            raise ValueError("Annotation integrity manifest is incomplete")
+        for name, incoming, outgoing in (
+            ("normalization.receipt.json", "subset.vcf", "normalized.vcf"),
+            ("annotation.receipt.json", "normalized.vcf", "annotated.vcf"),
         ):
-            raise ValueError("Annotation stage linkage failed")
+            receipt = json.loads((rehearsal / name).read_text())
+            if (
+                receipt["input_sha256"] != integrity[incoming]
+                or receipt["output_sha256"] != integrity[outgoing]
+                or receipt["returncode"] != 0
+            ):
+                raise ValueError("Annotation stage linkage failed")
     configuration = {
         "inputs": fingerprints,
         "rehearsal_integrity_sha256": sha256(rehearsal / "integrity_manifest.json"),
         "hpo_manifest_sha256": sha256(spec.hpo_directory / "manifest.json"),
         "code_sha256": code_checksum(),
-        "scope": "previously annotated bounded subset only",
+        "scope": "verified disjoint shard assembly"
+        if assembly
+        else "previously annotated bounded subset only",
         "specification": spec.model_dump(mode="json"),
     }
     try:
@@ -167,7 +176,11 @@ def _run(spec: Phase5Input, *, interrupt_after: str | None = None) -> dict:
         raise describe_mismatch(exc, configuration) from None
 
     def prepare(path):
-        metrics = verify_split_genotypes(rehearsal / "subset.vcf", rehearsal / "normalized.vcf")
+        metrics = (
+            json.loads((rehearsal / "reconciliation.json").read_text())
+            if assembly
+            else verify_split_genotypes(rehearsal / "subset.vcf", rehearsal / "normalized.vcf")
+        )
         hpo = extract_explicit_hpo(spec.phenotype_docx)
         store = IndexedPhenotypeStore(spec.hpo_directory)
         try:
@@ -184,7 +197,9 @@ def _run(spec: Phase5Input, *, interrupt_after: str | None = None) -> dict:
         atomic_json(path / "reconciliation.json", metrics)
         atomic_json(
             path / "annotation_provenance.json",
-            {
+            prior
+            if assembly
+            else {
                 name: json.loads((rehearsal / name).read_text())
                 for name in ("normalization.receipt.json", "annotation.receipt.json")
             },
@@ -194,17 +209,29 @@ def _run(spec: Phase5Input, *, interrupt_after: str | None = None) -> dict:
     prepare_path = runner.stage("prepare", prepare)
     if interrupt_after == "prepare":
         raise InterruptedError("Requested interruption after committed preparation")
-    imported = runner.stage(
-        "ingest",
-        lambda path: ingest_vep(
-            rehearsal / "annotated.vcf", rehearsal / "normalized.vcf", path / "tables"
-        ),
-    )
+
+    def import_tables(path):
+        if assembly:
+            verify_assembly(rehearsal)
+            shutil.copytree(rehearsal / "tables", path / "tables")
+            for name, digest in json.loads((rehearsal / "tables" / "manifest.json").read_text())[
+                "outputs"
+            ].items():
+                if sha256(path / "tables" / name) != digest:
+                    raise ValueError("Assembled table changed during copy")
+        else:
+            ingest_vep(rehearsal / "annotated.vcf", rehearsal / "normalized.vcf", path / "tables")
+
+    imported = runner.stage("ingest", import_tables)
     table_dir = imported / "tables"
     import_metrics = json.loads((table_dir / "manifest.json").read_text())
     hpo = json.loads((prepare_path / "phenotype.json").read_text())["explicit_hpo_ids"]
     # The prepared receipt includes the pinned reference checksum in its configuration.
-    reference_checksum = prior["authorized_scope"]["operations"][0]["reference_sha256"]
+    reference_checksum = (
+        prior["context"][0]["reference_sha256"]
+        if assembly
+        else prior["authorized_scope"]["operations"][0]["reference_sha256"]
+    )
     context = GenomicInput(
         genome_build="GRCh38",
         annotation_build="GRCh38",
@@ -312,6 +339,8 @@ def _run(spec: Phase5Input, *, interrupt_after: str | None = None) -> dict:
                 "genotype_reconciliation": True,
                 "source_integrity_verified": True,
             }
+            if assembly:
+                metrics["coverage"] = prior["coverage"]
             atomic_json(path / "sanitized_metrics.json", metrics)
             (path / "private_research_report.md").write_text(
                 "# Phase 5 bounded Track 1 research dry run\n\n"

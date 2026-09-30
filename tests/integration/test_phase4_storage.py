@@ -1,6 +1,7 @@
 import duckdb
 import pytest
 
+from rare_disease_agent.reporting.provenance import software_identity
 from rare_disease_agent.storage.evidence import EvidenceStore
 from rare_disease_agent.storage.membership import CandidateMembershipStore
 from rare_disease_agent.synthetic.cases import load_synthetic_phenotype_store
@@ -121,12 +122,14 @@ def test_compound_pair_failure_rolls_back_pair_table_and_pair_evidence(tmp_path,
                 genotype="0/1",
                 genotype_calls_json=json.dumps({"sample": {"genotype": "0/1", "quality": 90}}),
             )
-            for i in range(3)
+            for i in range(24)
         ],
         source,
     )
     evaluator = InheritanceEvaluator(
-        Pedigree(proband_id="sample", individuals=[Individual(id="sample")]), run_id="pairs"
+        Pedigree(proband_id="sample", individuals=[Individual(id="sample")]),
+        run_id="pairs",
+        software=software_identity(),
     )
     toolbox = VariantToolbox(
         source,
@@ -141,7 +144,13 @@ def test_compound_pair_failure_rolls_back_pair_table_and_pair_evidence(tmp_path,
         nonlocal calls
         if len(variants) == 2:
             calls += 1
-            if calls == 2:
+            if calls == 140:
+                assert (
+                    toolbox.membership._connection.execute(
+                        "SELECT count(*) FROM compound_pairs"
+                    ).fetchone()[0]
+                    == 128
+                )
                 raise RuntimeError("synthetic pair interruption")
         return original(variants)
 
@@ -159,12 +168,82 @@ def test_compound_pair_failure_rolls_back_pair_table_and_pair_evidence(tmp_path,
         )
         monkeypatch.setattr(evaluator, "evaluate", original)
         toolbox.evaluate_inheritance(EvaluateInheritanceParameters(branch="all"))
-        assert db.execute("SELECT count(*) FROM compound_pairs").fetchone()[0] == 3
+        assert db.execute("SELECT count(*) FROM compound_pairs").fetchone()[0] == 276
         assert (
             db.execute(
                 "SELECT count(*) FROM evidence WHERE method='compound_heterozygous'"
             ).fetchone()[0]
-            == 3
+            == 24
         )
+    finally:
+        toolbox.membership.close()
+
+
+def test_dense_gene_pair_storage_stays_bounded_and_replaces_existing_pairs(tmp_path):
+    import json
+
+    from rare_disease_agent.agents.schemas import EvaluateInheritanceParameters
+    from rare_disease_agent.storage.parquet import write_variants_parquet
+    from rare_disease_agent.tools.inheritance.evaluator import InheritanceEvaluator
+    from rare_disease_agent.tools.inheritance.schemas import Individual, Pedigree
+    from rare_disease_agent.tools.variants.agent_tools import VariantToolbox
+    from rare_disease_agent.tools.variants.vcf import VariantRecord
+
+    source = tmp_path / "synthetic-dense-gene.parquet"
+    write_variants_parquet(
+        (
+            VariantRecord(
+                chromosome="1",
+                position=i + 1,
+                reference="A",
+                alternate="G",
+                variant_id=f"synthetic-{i:03d}",
+                gene="SYN_DENSE",
+                genotype="0/1",
+                genotype_calls_json=json.dumps({"sample": {"genotype": "0/1", "quality": 90}}),
+            )
+            for i in range(40)
+        ),
+        source,
+    )
+    evaluator = InheritanceEvaluator(
+        Pedigree(proband_id="sample", individuals=[Individual(id="sample")]),
+        run_id="dense-pairs",
+        software=software_identity(),
+    )
+    toolbox = VariantToolbox(
+        source,
+        run_id="dense-pairs",
+        membership_database=tmp_path / "dense.duckdb",
+        inheritance_evaluator=evaluator,
+    )
+    try:
+        db = toolbox.membership._connection
+        # A stricter synthetic stress limit, not a change to production resource safeguards.
+        db.execute("SET memory_limit='64MB'")
+        db.execute("SET threads=1")
+        db.execute("SET temp_directory=''")
+        for _ in range(2):
+            toolbox.evaluate_inheritance(EvaluateInheritanceParameters(branch="all"))
+            assert db.execute("SELECT count(*) FROM compound_pairs").fetchone()[0] == 780
+            assert (
+                db.execute(
+                    "SELECT count(*) FROM evidence WHERE method='compound_heterozygous'"
+                ).fetchone()[0]
+                == 40
+            )
+            assert (
+                db.execute(
+                    "SELECT max(score) FROM evidence WHERE method='compound_heterozygous'"
+                ).fetchone()[0]
+                <= 0.5
+            )
+        payload = json.loads(
+            db.execute(
+                "SELECT payload FROM compound_pairs "
+                "WHERE variant_a='synthetic-000' AND variant_b='synthetic-039'"
+            ).fetchone()[0]
+        )
+        assert payload["phase"] == "unknown" and payload["warnings"]
     finally:
         toolbox.membership.close()

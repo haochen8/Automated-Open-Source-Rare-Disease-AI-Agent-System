@@ -114,6 +114,11 @@ identify a causal variant, establish clinical accuracy, supply a whole-case chal
 or authorize an upload. Preserve the original data for later coverage expansion. See the
 [Phase 6 recommendation](phase6-recommendation.md) for the proposed next evaluation phase.
 
+Existing runs can be inspected against explicitly supplied local labels with
+`phase5 evaluate`. See [case-level failure analysis](case-evaluation.md) for truth/source binding,
+separate gene/allele metrics, failed-case accounting and private output requirements. This does not
+expand the annotated scope or establish official accuracy.
+
 ## Larger autosomal resource benchmark
 
 `workflows.benchmark.select_autosomal_benchmark` selects a configurable maximum of 1–500 records
@@ -147,3 +152,9 @@ limit. The larger synthetic regression covers thousands of alleles. Compound pai
 an assigned gene and matching chromosome; placeholder unknown genes cannot establish a shared
 gene. The persistent pair query also requires active branch membership. Individual evidence and
 conservative membership remain available for unassigned variants.
+
+Verified disjoint shard assemblies are also accepted as `annotation_rehearsal`. Phase 5 verifies
+the assembly and nested table checksums, copies the complete prepared tables, and recomputes
+evidence and ranking globally. It retains source coverage and shard provenance in private outputs.
+See [process-isolated coverage batches](phase5-scaling.md#verified-global-assembly-and-process-isolation)
+for authorization, resource bounds, compatible inputs and recovery behavior.

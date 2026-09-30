@@ -37,6 +37,14 @@ def test_edge_cases_have_persistent_evidence_rescue_and_redacted_reports(tmp_pat
                 ).fetchone()[0]
                 < 0.8
             )
+        if case in {"missing-parent", "unphased-compound"}:
+            assert (
+                connection.execute(
+                    "SELECT max(score) FROM evidence WHERE variant_id='SYNTH-CAUSAL-001' "
+                    "AND method='autosomal_dominant'"
+                ).fetchone()[0]
+                < 0.8
+            )
         if case == "unphased-compound":
             pairs = [
                 json.loads(row[0])

@@ -71,6 +71,12 @@ X-linked, and compound-heterozygous models. Missing parental calls keep de novo 
 Compound-heterozygous phase is `confirmed_trans` only when opposite parental origins are observed;
 otherwise it remains `possible_trans` or `unknown`.
 
+Inheritance evaluator v2 caps dominant fit at 0.5 when there is neither another affected carrier
+in the supplied pedigree nor two called reference parents. Agreement among the observed calls
+alone cannot establish strong support for a singleton or a child with one reference parent.
+The existing segregation ratio and quality/affected-status caps still apply; support for a dominant
+pattern remains a heuristic, not evidence of pathogenicity or a calibrated probability.
+
 The preliminary ranker computes separately inspectable quality, rarity, consequence, phenotype, and
 inheritance features. Configurable defaults are a weighted linear baseline, not a scientific
 optimality claim. Four automatic ablations compare filtering only, phenotype, inheritance, and both.

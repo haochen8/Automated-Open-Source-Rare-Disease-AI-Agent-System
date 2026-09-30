@@ -28,6 +28,71 @@ from rare_disease_agent.workflows.phase5_diagnostics import (
 
 app = typer.Typer(help="Private bounded Track 1 rehearsal; no downloads or live models.")
 
+
+@app.command("coverage-batch")
+def coverage_batch(config: Path):
+    """Run an explicitly authorized bounded batch through isolated fixed stages."""
+    from rare_disease_agent.workflows.coverage_batch import CoverageBatchInput, run_batch
+    from rare_disease_agent.workflows.partitioning import _private
+
+    try:
+        _private(config)
+        spec = CoverageBatchInput.model_validate_json(config.read_text())
+        run_batch(spec)
+    except Exception as exc:
+        typer.echo("Private coverage batch failed: " + type(exc).__name__, err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo("Private coverage batch completed. No case values are displayed.")
+
+
+@app.command("coverage-plan")
+def coverage_plan(config: Path):
+    """Account for every source record and plan disjoint shards without annotation."""
+    from rare_disease_agent.workflows.partitioning import CoverageInput, prepare_coverage
+
+    try:
+        _outside_git(config.resolve())
+        prepare_coverage(CoverageInput.model_validate_json(config.read_text()))
+    except Exception as exc:
+        typer.echo("Private coverage planning failed: " + type(exc).__name__, err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo("Private source-accounting plan written. No case values are displayed.")
+
+
+@app.command("coverage-materialize")
+def coverage_materialize(
+    plan: Path,
+    output: Path,
+    first: int = 1,
+    last: int = 1,
+    confirmed_local_research_use: bool = False,
+):
+    """Prepare requested disjoint shards only; never normalize, annotate or rank."""
+    from rare_disease_agent.workflows.partitioning import materialize_partitions
+
+    try:
+        materialize_partitions(
+            plan, output, first=first, last=last, authorized=confirmed_local_research_use
+        )
+    except Exception as exc:
+        typer.echo("Private partition preparation failed: " + type(exc).__name__, err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo("Requested private partitions verified. No case values are displayed.")
+
+
+@app.command("evaluate")
+def evaluate(manifest: Path, output: Path):
+    """Analyze explicit local truth against existing runs; write private JSON/TSV only."""
+    from rare_disease_agent.ranking.case_evaluation import evaluate_cases
+
+    try:
+        evaluate_cases(manifest, output)
+    except Exception as exc:
+        typer.echo("Private case evaluation failed: " + type(exc).__name__, err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo("Private case evaluation written. No case values are displayed.")
+
+
 PROCESS_INSPECTION_DENIED = (
     "Host process inspection permission denied; cannot enforce Phase 5 resource limits. "
     "Run stopped. Process inspection permission is required to retry."

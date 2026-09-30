@@ -97,6 +97,34 @@ def test_low_quality_genotype_caps_inheritance_fit() -> None:
     assert result.quality_checks_passed is False
 
 
+@pytest.mark.parametrize("mother,father", [(None, None), ("0/0", None), (None, "0/0")])
+def test_sparse_dominant_evidence_cannot_be_a_strong_match(mother, father):
+    evaluator = InheritanceEvaluator(synthetic_pedigree(), run_id="sparse-dominance")
+    result = evaluator.evaluate([variant(mother=mother, father=father)])
+    dominant = next(item for item in result.evidence if item.model == "autosomal_dominant")
+    summary = next(item for item in result.summaries if item.model == "autosomal_dominant")
+
+    assert 0 < dominant.fit < 0.8
+    assert summary.strong_matches == 0
+    assert any("insufficient" in warning.lower() for warning in dominant.warnings)
+
+
+def test_affected_carrier_relative_supports_dominance_without_complete_parents():
+    pedigree = synthetic_pedigree()
+    pedigree.individuals[1].affected = True
+    evaluator = InheritanceEvaluator(pedigree, run_id="familial-dominance")
+
+    assert evaluator.evaluate_dominant(variant(mother="0/1", father=None)).fit == 1
+    # An unaffected reference relative alone supplies no positive segregation evidence.
+    pedigree.individuals[1].affected = False
+    assert evaluator.evaluate_dominant(variant(mother="0/0", father=None)).fit < 0.8
+
+
+def test_complete_reference_parents_retain_de_novo_dominant_compatibility():
+    evaluator = InheritanceEvaluator(synthetic_pedigree(), run_id="complete-trio")
+    assert evaluator.evaluate_dominant(variant()).fit == 1
+
+
 def test_compound_heterozygous_phase_is_confirmed_only_with_parental_origin() -> None:
     evaluator = InheritanceEvaluator(synthetic_pedigree(), run_id="compound")
     confirmed = evaluator.find_compound_heterozygous_pairs(

@@ -43,6 +43,9 @@ inheritance 0.25. These are architecture benchmarks, not independently validated
 The named split is disjoint, but cases deliberately reuse synthetic templates and causal variants.
 There is no claim of population-level generalization or leakage-free clinical validation.
 
+The following table and associated figures record the original evaluator-v1 benchmark. The
+evaluator-v2 comparison below preserves that historical baseline rather than replacing it.
+
 | Evaluation case | Causal rank | Filtering only | + Phenotype | + Inheritance | Both |
 |---|---:|---:|---:|---:|---:|
 | Incomplete penetrance | 1 | 4 | 1 | 4 | 1 |
@@ -70,6 +73,27 @@ Brier diagnostic is **0.1710**, using `1 - heuristic_fit` as a proxy; it is not 
 Run artifacts retain every case's rank, runtime, RSS, branch survival, false positives, uncertainty
 metrics, four ranking ablations, phenotype-removal ablation and software/data provenance. Runtime
 and memory measurements for the final run are recorded in [Phase 4 validation](phase4-validation.md).
+
+### Track 1 evidence-sufficiency correction (2026-09-29)
+
+Evaluator v1 assigned dominant fit 1.0 to an affected alternate carrier with no called parents,
+or with only one reference parent: every observed call agreed, even though positive segregation
+evidence was absent. Evaluator v2 retains uncertainty for this pattern, as specified in
+[the architecture](architecture.md#phase-3-evidence-and-ranking). Synthetic singleton and duo
+regressions reproduce the old failure; complete reference-parent and affected-carrier-relative
+controls retain their support. Persistent workflow checks cover missing-parent and unphased cases.
+
+The unchanged `benchmark-phase4` command, default weight candidates and seed 17 were run before
+and after this correction in separate fresh temporary directories. Both selected baseline weights.
+On the seven evaluation fixtures, MRR changed from 0.8333 to 0.8571; top-1 remained 5/7 and top-5/10
+remained 7/7. The annotation-missing target moved from rank 3 to 2; other target ranks were unchanged.
+Final-branch target recall and rescue recall remained 100%. Other strong inheritance-model calls
+under the single-label convention decreased from four to two. The remaining dominant/de-novo
+overlap is not evidence of mutually exclusive diagnoses.
+
+These fixtures helped reveal the defect and are now regression evidence, not a fresh held-out
+accuracy assessment. The correction improves evidence handling; real-case accuracy remains
+unmeasured. No private inputs, new annotations, downloads or live model inference were used.
 
 ## Recovery and authorized-data scope
 

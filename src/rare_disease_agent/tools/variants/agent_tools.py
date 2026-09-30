@@ -7,6 +7,8 @@ from itertools import islice
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
+
 from rare_disease_agent.agents.schemas import (
     AgentDecision,
     BranchParameters,
@@ -441,6 +443,21 @@ class VariantToolbox:
 
         def pair_evidence():
             cursor = connection.cursor()
+            pair_batch = []
+
+            def flush_pairs():
+                if not pair_batch:
+                    return
+                connection.register("incoming_compound_pairs", pa.Table.from_pylist(pair_batch))
+                try:
+                    connection.execute(
+                        "INSERT OR REPLACE INTO compound_pairs "
+                        "SELECT run_id, variant_a, variant_b, payload FROM incoming_compound_pairs"
+                    )
+                finally:
+                    connection.unregister("incoming_compound_pairs")
+                pair_batch.clear()
+
             try:
                 cursor.execute(
                     """SELECT a.variant_id, b.variant_id
@@ -474,24 +491,27 @@ class VariantToolbox:
                         ]
                         result = self.inheritance_evaluator.evaluate(variants)
                         for pair in result.compound_heterozygous_pairs:
-                            connection.execute(
-                                "INSERT OR REPLACE INTO compound_pairs VALUES (?, ?, ?, ?)",
-                                [
-                                    self.membership.run_id,
-                                    pair.variant_a,
-                                    pair.variant_b,
-                                    pair.model_dump_json(),
-                                ],
+                            pair_batch.append(
+                                {
+                                    "run_id": self.membership.run_id,
+                                    "variant_a": pair.variant_a,
+                                    "variant_b": pair.variant_b,
+                                    "payload": pair.model_dump_json(),
+                                }
                             )
+                            if len(pair_batch) == 128:
+                                flush_pairs()
                         yield from (
                             item
                             for item in result.evidence
                             if item.model in {"compound_heterozygous", "autosomal_recessive"}
                         )
+                flush_pairs()
             finally:
                 cursor.close()
 
-        # One bounded transaction avoids a durable commit for every pair.
+        # Bulk pair inserts also bound DuckDB's per-statement transaction buffers. The same
+        # transaction still owns all pair rows and their evidence, including generator failure.
         self.evidence_store.write(pair_evidence())
         summaries = []
         for model, strong, uncertain in connection.execute(

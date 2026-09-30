@@ -3,6 +3,11 @@
 Status: proposed, not started. Phase 5 must complete first. This plan contains no patient-derived
 results and authorizes neither additional downloads nor submission.
 
+Track 1 is the current priority. Targeted correctness work may proceed while the Phase 5
+completion evidence is being located; it does not satisfy the entry gate or start a private run.
+The [evaluator-v2 synthetic comparison](phase4.md#track-1-evidence-sufficiency-correction-2026-09-29)
+is one such correction, not independent accuracy validation.
+
 ## Objective
 
 Establish how stable, reproducible and reviewable the completed deterministic Track 1 workflow is.
@@ -47,6 +52,27 @@ records recoverable. A subset ranking must never be submitted as a complete case
 7. Run the full offline synthetic suite and privacy guard. Prepare a software-only release candidate,
    reproducibility instructions and limitations. Keep all patient artifacts, including aggregate
    patient results, outside Git. Publishing or submission is a separate action.
+
+## Accuracy evaluation decisions before tuning
+
+First establish coverage and a frozen, independent labeled evaluation set. Do not optimize the
+ranking weights against the bundled templates or the challenge case. Separate tuning and final
+evaluation cases, account for related families and reused variants/genes, and record knowledge
+resource versions so overlap can be assessed. Report variant and gene retrieval separately, and
+require both causal alleles when evaluating a labeled compound-heterozygous pair. Include excluded,
+unsupported and failed cases in coverage accounting rather than reporting only successful runs.
+
+Use the same cases and resource scope for a comparison with an established offline prioritizer
+before introducing a more complex ranking model. [PhEval](https://monarch-initiative.github.io/pheval/)
+provides a reusable framework that separates corpus preparation, tool execution and analysis;
+assess its fit before building another benchmark framework. Its
+[Exomiser integration](https://github.com/monarch-initiative/pheval.exomiser) is a candidate comparator.
+These are proposed integrations, not installed dependencies or authorized resource downloads.
+
+Accept a ranking change only with a documented reason, preserved scientific invariants, and
+paired evaluation against the frozen baseline. Report regressions and uncertainty alongside gains.
+Without independent labels, report correctness and robustness improvements without claiming
+improved real-case accuracy.
 
 ## Optional experiment after the deterministic baseline
 

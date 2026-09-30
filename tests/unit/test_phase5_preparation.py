@@ -206,3 +206,51 @@ def test_vep_version_probe_uses_help_and_preserves_environment_launcher(tmp_path
     )
     adapters.execute_job(job, authorized=True, runner=runner)
     assert seen == [[str(binary), "--help"]]
+
+
+def test_batch_owned_tool_group_preserves_parent_cleanup_on_timeout(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from rare_disease_agent.tools.variants import adapters
+
+    killed = []
+    seen = []
+
+    class Process:
+        pid = 123
+        returncode = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            killed.append("child")
+            self.returncode = -9
+
+        def wait(self):
+            return self.returncode
+
+    def launch(*args, **kwargs):
+        seen.append(kwargs["start_new_session"])
+        return Process()
+
+    monkeypatch.setattr(adapters.subprocess, "Popen", launch)
+    monkeypatch.setattr(
+        adapters.psutil,
+        "Process",
+        lambda pid: SimpleNamespace(
+            children=lambda recursive: [], memory_info=lambda: SimpleNamespace(rss=1024**3)
+        ),
+    )
+    job = SimpleNamespace(
+        output_path=tmp_path / "unused", memory_mb=128, output_limit_mb=1, timeout_seconds=1
+    )
+    with pytest.raises(RuntimeError, match="resource limit"):
+        adapters.bounded_process(["/synthetic/tool"], job, isolate_process_group=False)
+    assert seen == [False] and killed == ["child"]

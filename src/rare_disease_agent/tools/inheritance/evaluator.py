@@ -16,7 +16,7 @@ from rare_disease_agent.tools.inheritance.schemas import (
     VariantGenotypes,
 )
 
-TOOL_VERSION = "inheritance-evaluator-v1"
+TOOL_VERSION = "inheritance-evaluator-v2"
 
 
 class InheritanceEvaluator:
@@ -131,7 +131,7 @@ class InheritanceEvaluator:
         )
 
     def evaluate_dominant(self, variant: VariantGenotypes) -> InheritanceEvidence:
-        proband, _, _ = self._calls(variant)
+        proband, mother, father = self._calls(variant)
         evidence: list[str] = []
         warnings: list[str] = []
         if not proband or not proband.called or not proband.has_alternate:
@@ -140,6 +140,7 @@ class InheritanceEvaluator:
         else:
             informative = 0
             consistent = 0
+            affected_carrier_relative = False
             for individual in self.pedigree.individuals:
                 if individual.affected is None:
                     continue
@@ -147,6 +148,12 @@ class InheritanceEvaluator:
                 if not call or not call.called:
                     continue
                 informative += 1
+                if (
+                    individual.id != self.pedigree.proband_id
+                    and individual.affected
+                    and call.has_alternate
+                ):
+                    affected_carrier_relative = True
                 if (individual.affected and call.has_alternate) or (
                     not individual.affected and call.is_reference
                 ):
@@ -162,6 +169,15 @@ class InheritanceEvaluator:
                 )
             if informative < 2:
                 warnings.append("Dominant segregation evidence is sparse.")
+            reference_parents = bool(
+                mother and father and mother.is_reference and father.is_reference
+            )
+            if not affected_carrier_relative and not reference_parents:
+                fit = min(fit, 0.5)
+                warnings.append(
+                    "Insufficient positive segregation evidence or complete reference-parent "
+                    "evidence; dominant inheritance remains uncertain."
+                )
         return self._result(
             variant,
             model="autosomal_dominant",

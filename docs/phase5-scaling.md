@@ -29,10 +29,134 @@ does not rename sequences, change coordinates, validate sequence equivalence, in
 inheritance-model coverage. Record-level REF checks and genomic context validation are required
 before any proposed mapping is used for analysis. No additional reference download is implied.
 
+## Compound-pair storage
+
+Compound-pair payloads are inserted in batches of at most 128 within the same transaction as
+their evidence. Per-pair SQL inserts can accumulate DuckDB transaction buffers until memory is
+exhausted even when the final table is small. Batching preserves candidate enumeration, pair
+payloads, replacement semantics, evidence score reduction and the 100,000-pair work budget.
+A failed operation rolls back both pair rows and pair evidence, including batches already flushed.
+The synthetic dense-gene regression writes and replaces all 780 pairs under a 64 MB DuckDB limit;
+production memory limits are unchanged. This addresses storage overhead, not quadratic pair growth.
+
 ## Remaining expansion gates
 
-Use a fresh private directory for a larger autosomal benchmark, retaining every original ordinal
-and split-allele identity. Keep live memory/disk limits and the original inputs unchanged. Measure
+Use the sampler only within its existing cap. For disjoint coverage preparation, use the interface
+below; another evenly spaced sample is not whole-input coverage. Keep live memory/disk limits and
+the original inputs unchanged. Measure
 actual annotation, candidate expansion, database/index overhead and pair workload before budgeting
 whole-input processing. A bounded result cannot establish whole-case completeness, and decoy,
 sex-chromosome and unannotated-contig records must remain recoverable with explicit limitations.
+
+## Disjoint source preparation
+
+`phase5 coverage-plan` streams a pinned single-sample VCF into a complete source-accounting plan.
+It records every source record and alternate count in disjoint contiguous ordinal intervals, with
+checksums, without copying the full VCF. Eligible runs are split at contig changes, deferred records
+and a configurable 1–500 source-record boundary. A multiallelic record stays intact. Each materialized
+record gains original `RDA_SOURCE_ROW` and `RDA_ALT_IDX` provenance; sample fields remain unchanged.
+
+Supply a private JSON configuration matching `workflows.partitioning.CoverageInput`:
+
+```json
+{
+  "source": "/private/path/original.vcf.gz",
+  "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "output": "/private/path/new-coverage-plan",
+  "records_per_shard": 500,
+  "confirmed_local_research_use": true
+}
+```
+
+The digest above is a placeholder; supply the explicitly authorized input's actual digest locally.
+From the checkout root, with the selected existing interpreter:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m rare_disease_agent phase5 coverage-plan /private/path/config.json
+PYTHONPATH=src .venv/bin/python -m rare_disease_agent phase5 coverage-materialize \
+  /private/path/new-coverage-plan /private/path/new-partitions \
+  --first 1 --last 1 --confirmed-local-research-use
+```
+
+The plan publishes atomically in a fresh directory. Materialization performs one sequential source
+scan per request, with before/after input checksums, and writes only the requested range of at most
+64 shards. This avoids one full scan per shard. `shard_000001/subset.vcf` and `receipt.json` are
+committed through the existing immutable stage journal under a single-writer lock. Repeating a
+request verifies committed shards without rewriting them. Interrupted uncommitted shards can be
+recomputed. A changed source, plan, implementation or committed artifact is refused; use a fresh
+plan/output instead of forcing resume. The journal is complete only after every planned eligible
+shard has been materialized; that means preparation completeness, not annotation or analysis.
+
+Current eligibility is limited to diploid sequence records on exact numeric autosomal names.
+`chr` aliases, sex/PAR, mitochondrial, nonstandard, symbolic/nonsequence and non-diploid records
+remain explicitly deferred and recoverable in the original input. Missing calls stay unknown.
+Malformed records and ambiguous autosomal aliases fail closed. Eligibility does not verify local
+reference/cache support: REF checking, normalization, annotation and genotype reconciliation remain
+separate authorized operations. No chromosome renaming, inference, installation or download occurs.
+
+Preparation uses bounded lines and headers, streaming metadata, a 100,000-shard planning cap and
+sampled local resource checks: one hour, 1 GiB process RSS, 256 MiB minimum available memory,
+25 GiB free-disk reserve, and 512 MiB output budget. The output budget includes existing materialized
+artifacts on resume; it is a preparation safeguard, not permission to stage an entire genome.
+Paths and derived summaries remain outside Git; CLI output includes only fixed success/error labels.
+
+## Verified global assembly and process isolation
+
+`phase5 coverage-batch /private/path/batch.json` accepts a private
+`workflows.coverage_batch.CoverageBatchInput` configuration. It names an existing source plan and
+materialization directory, an explicit sorted list of **one to eight** shard numbers, two pinned
+local tool specifications, a `Phase5Input` ranking specification, and a fresh external output.
+It requires both local research and annotation-execution authorization. A command or configuration
+file is not authorization to expand a previously approved subset. Materialization remains separate;
+the coordinator neither chooses additional shards nor downloads tools or data.
+
+Each pinned tool specifies its absolute launcher path, executable SHA-256, and existing `ToolJob`
+configuration. Job input/output paths are templates: the fixed dispatcher replaces them only with
+stage-owned paths. The normalization provider is bcftools; annotation is offline VEP/cache 116,
+GRCh38, with the Track 1 profile. Both tools share the pinned local reference. This coordinator
+requires one worker, buffer size one, at most 320 MiB tool RSS, 512 MiB tool output, and 1,800 seconds
+per external operation. Existing adapters independently check executable version and reference
+checksum. Cache path/release compatibility is checked; full cache-file supply-chain verification
+remains an open gate.
+
+For each requested shard, an annotation process normalizes and annotates, then exits. A separate
+validation process reconciles source alternate ordinals and GT/GQ and imports every allele,
+transcript consequence and allele/gene candidate. Separate assembly and ranking processes follow.
+Each process runs with a credential-free environment, disabled tracing, discarded stdout/stderr,
+and a fixed typed dispatcher. Worker working directories are their private stage directories;
+configuration paths must be absolute. Assembly's 256 MB, single-threaded DuckDB checks disable
+spilling, so temporary variant tables cannot fall back to the repository directory. There is no
+arbitrary command or SQL input and no live model.
+
+The parent checkpoints each attempt's elapsed time, sampled family RSS, output size and exit status
+under `attempts/`, including failures. Successful stage directories publish through the immutable
+journal. Resuming an unchanged batch verifies and reuses committed annotation, validation and
+assembly. A failed ranking stage is recomputed without rerunning annotation. A changed source,
+configuration, implementation or committed artifact fails closed. Attempt receipts stay separate
+from immutable scientific stages.
+
+The supervisor requires 1 GiB available memory at each stage entry and enforces 3 GiB process-family
+RSS, 2 GiB total batch output, one hour **per stage**, 256 MiB minimum live available memory and a
+25 GiB free-disk reserve. Limits stop processing; they do not justify dropping candidates. The
+one-hour stage cap is not a whole-batch runtime estimate. Existing pair-work limits remain unchanged.
+
+Validation binds actual tagged source rows to the coverage segment digest and matches the
+annotation receipt chain. Assembly requires compatible source plan, sample identity, reference,
+annotation context and ingestion implementation. It streams all four tables in source-interval
+order, retains every transcript, and rejects overlapping intervals, duplicate source alleles,
+duplicate normalized identities and duplicate candidate IDs. Duplicate normalized alleles require
+an explicit source mapping; they are never silently removed.
+
+The resulting `assembly/` is a checksummed Phase 5 input. Set the ranking specification's
+`annotation_rehearsal` to `<batch-output>/assembly` and `output` to `<batch-output>/ranking/run`.
+Phase 5 copies verified tables without repeating ingestion, then computes evidence, cross-shard
+same-gene/chromosome pairs and all ranking contexts globally. It never concatenates shard-local
+rankings. Coverage records selected and unprocessed source records/alternates plus all original
+dispositions; whole-genome analysis and causal accuracy remain unestablished.
+
+Synthetic regressions compare assembled allele, transcript and candidate tables with an
+unpartitioned control, exercise cross-shard pair evidence in the actual global workflow, reject
+mixed or corrupted inputs, and resume after ranking failure without repeating annotation.
+The next private expansion should be a small, explicitly scoped multi-shard pilot, followed by
+review of measured annotation cost, candidate/transcript expansion, pair workload and disk use.
+Eight shards is a hard request cap, not a recommendation to run eight immediately.
