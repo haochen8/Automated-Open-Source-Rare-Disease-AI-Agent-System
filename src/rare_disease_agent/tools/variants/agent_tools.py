@@ -33,6 +33,7 @@ from rare_disease_agent.storage.membership import CandidateMembershipStore
 from rare_disease_agent.tools.inheritance.evaluator import InheritanceEvaluator
 from rare_disease_agent.tools.inheritance.schemas import GenotypeCall, VariantGenotypes
 from rare_disease_agent.tools.phenotype.tools import PhenotypeToolbox
+from rare_disease_agent.tools.variants.pair_workload import PAIR_WORK_BUDGET, count_pair_work
 
 
 class VariantToolError(RuntimeError):
@@ -430,15 +431,10 @@ class VariantToolbox:
             "VARCHAR, variant_b VARCHAR, payload VARCHAR, PRIMARY KEY(run_id, variant_a,"
             " variant_b))"
         )
-        potential_pairs = connection.execute(
-            "SELECT coalesce(sum(n*(n-1)/2),0) FROM ("
-            "SELECT count(*) n FROM variants v JOIN candidate_membership m USING(variant_id) "
-            "WHERE m.run_id=? AND m.branch=? AND v.genotype IN ('0/1','1/0','0|1','1|0') "
-            "AND m.active AND upper(trim(v.gene)) NOT IN ('','.', 'UNKNOWN','UNASSIGNED') "
-            "GROUP BY upper(v.gene), v.chromosome)",
-            [self.membership.run_id, parameters.branch],
-        ).fetchone()[0]
-        if potential_pairs > 100000:
+        potential_pairs = count_pair_work(
+            connection, membership=(self.membership.run_id, parameters.branch)
+        )
+        if potential_pairs > PAIR_WORK_BUDGET:
             raise VariantToolError("Compound-pair work budget exceeded; refine candidates first")
 
         def pair_evidence():

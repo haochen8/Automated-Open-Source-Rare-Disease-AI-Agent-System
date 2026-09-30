@@ -358,3 +358,168 @@ def test_batch_refuses_relative_paths_before_changing_worker_directory(tmp_path)
     raw["partitions"] = Path("synthetic-relative-input")
     with pytest.raises(ValueError, match="absolute local paths"):
         c.CoverageBatchInput.model_validate(raw)
+
+
+def reused_spec(spec, tmp_path):
+    output = tmp_path / "reuse-batch"
+    return spec.model_copy(
+        update={
+            "output": output,
+            "ranking": spec.ranking.model_copy(
+                update={
+                    "output": output / "ranking" / "run",
+                    "annotation_rehearsal": output / "assembly",
+                }
+            ),
+            "confirmed_annotation_execution": False,
+            "reuse_annotations": {
+                n: c.ReusedAnnotation(
+                    directory=spec.output / f"annotation_{n:06d}",
+                    integrity_sha256=sha256(
+                        spec.output / f"annotation_{n:06d}" / "integrity_manifest.json"
+                    ),
+                )
+                for n in spec.shards
+            },
+        }
+    )
+
+
+def test_import_annotations_without_execution_and_revalidate_current_tables(tmp_path, monkeypatch):
+    spec = setup(tmp_path)
+    validated(spec, monkeypatch)
+    reused = reused_spec(spec, tmp_path)
+    originals = {n: a.inventory(item.directory) for n, item in reused.reuse_annotations.items()}
+    monkeypatch.setattr(c, "execute_job", lambda *a, **kw: pytest.fail("Unexpected tool execution"))
+    monkeypatch.setattr(c, "supervise_stage", c.run_stage)
+    c.run_batch(reused)
+    journal = a.read_json(reused.output / "run.json")
+    assert journal["ended_at"] and "pair_preflight" in journal["stages"]
+    for n, before in originals.items():
+        assert a.inventory(reused.reuse_annotations[n].directory) == before
+        assert a.inventory(reused.output / f"annotation_{n:06d}") == before
+        assert (reused.output / f"validation_{n:06d}" / "proof.json").is_file()
+    report = a.read_json(reused.output / "pair_preflight" / "pair_workload.json")
+    assert report["eligible_candidate_pairs"] == 2
+    assert report["within_budget"] and not report["retained_pair_count_assessed"]
+    c.run_batch(reused)
+    assert a.read_json(reused.output / "run.json") == journal
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["pin", "bytes", "source", "tool", "configuration", "receipt", "extra", "symlink", "overlap"],
+)
+def test_reuse_rejects_wrong_or_mutated_annotation_before_batch_creation(
+    tmp_path, monkeypatch, mutation
+):
+    spec = setup(tmp_path)
+    validated(spec, monkeypatch)
+    reused = reused_spec(spec, tmp_path)
+    item = reused.reuse_annotations[1]
+    source = item.directory
+    if mutation == "pin":
+        reused.reuse_annotations[1] = item.model_copy(update={"integrity_sha256": "0" * 64})
+    elif mutation == "bytes":
+        (source / "annotated.vcf").write_text("SYNTHETIC_PRIVATE_SENTINEL")
+    elif mutation == "symlink":
+        link = tmp_path / "link"
+        link.symlink_to(source, target_is_directory=True)
+        reused.reuse_annotations[1] = item.model_copy(update={"directory": link})
+    elif mutation == "overlap":
+        reused = reused.model_copy(update={"output": source / "child"})
+    else:
+        if mutation == "extra":
+            (source / "extra.txt").write_text("synthetic")
+        elif mutation == "source":
+            path = source / "run_manifest.json"
+            data = a.read_json(path)
+            data["source_sha256"] = "0" * 64
+            atomic_json(path, data)
+        else:
+            path = source / "annotation.receipt.json"
+            data = a.read_json(path)
+            if mutation == "tool":
+                data["executable_sha256"] = "0" * 64
+            elif mutation == "configuration":
+                data["configuration"]["buffer_size"] = 2
+            else:
+                data["input_sha256"] = "0" * 64
+            atomic_json(path, data)
+        a.seal(source)
+        reused.reuse_annotations[1] = item.model_copy(
+            update={"integrity_sha256": sha256(source / "integrity_manifest.json")}
+        )
+    with pytest.raises(ValueError):
+        c.batch_identity(reused)
+    assert not reused.output.exists()
+
+
+def test_partial_reuse_requires_authorization_and_only_executes_new_shard(tmp_path, monkeypatch):
+    spec = setup(tmp_path)
+    validated(spec, monkeypatch)
+    reused = reused_spec(spec, tmp_path)
+    reused.reuse_annotations.pop(2)
+    with pytest.raises(PermissionError):
+        c.batch_identity(reused)
+    reused = reused.model_copy(update={"confirmed_annotation_execution": True})
+    calls = []
+
+    def execute(job, **kwargs):
+        calls.append(job.input_path.parent.name)
+        return fake_execute(job, **kwargs)
+
+    monkeypatch.setattr(c, "execute_job", execute)
+    monkeypatch.setattr(c, "supervise_stage", c.run_stage)
+    c.run_batch(reused)
+    assert calls == ["annotation_000002.partial"] * 2
+
+
+def test_over_budget_global_preflight_persists_and_blocks_ranking_on_resume(tmp_path, monkeypatch):
+    spec = setup(tmp_path)
+    monkeypatch.setattr(c, "execute_job", fake_execute)
+    monkeypatch.setattr(c, "supervise_stage", c.run_stage)
+    monkeypatch.setattr(
+        c, "PAIR_WORK_BUDGET", 1
+    )  # Two real cross-shard pairs; small synthetic cap.
+    monkeypatch.setattr(c, "phase5_run", lambda *_: pytest.fail("Ranking must not start"))
+    for _ in range(2):
+        with pytest.raises(ValueError, match="preflight blocks"):
+            c.run_batch(spec)
+        journal = a.read_json(spec.output / "run.json")
+        assert "pair_preflight" in journal["stages"] and "ranking" not in journal["stages"]
+        assert journal["ended_at"] is None
+        report = a.read_json(spec.output / "pair_preflight" / "pair_workload.json")
+        assert report["eligible_candidate_pairs"] == 2 and report["within_budget"] is False
+        assert (
+            a.verify_assembly(spec.output / "assembly")["coverage"]["included_source_records"] == 2
+        )
+
+
+def test_reuse_worker_does_not_require_annotation_execution_permission(tmp_path, monkeypatch):
+    spec = setup(tmp_path)
+    validated(spec, monkeypatch)
+    reused = reused_spec(spec, tmp_path)
+    reused.output.mkdir()
+    output = reused.output / "annotation_000001.partial"
+    output.mkdir()
+    c.supervise_stage(reused, "annotation_000001", output)
+    assert a.verified(output) == a.verified(reused.reuse_annotations[1].directory)
+
+
+def test_reuse_detects_source_change_during_copy(tmp_path, monkeypatch):
+    spec = setup(tmp_path)
+    validated(spec, monkeypatch)
+    reused = reused_spec(spec, tmp_path)
+    output = tmp_path / "import"
+    output.mkdir()
+    copy = shutil.copyfile
+
+    def mutate(source, target):
+        copy(source, target)
+        if source.name == "annotated.vcf":
+            source.write_text("SYNTHETIC_PRIVATE_SENTINEL")
+
+    monkeypatch.setattr(c.shutil, "copyfile", mutate)
+    with pytest.raises(ValueError):
+        c.import_annotation(reused, 1, output)

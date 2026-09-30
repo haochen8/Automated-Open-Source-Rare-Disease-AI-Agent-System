@@ -106,7 +106,8 @@ Paths and derived summaries remain outside Git; CLI output includes only fixed s
 `workflows.coverage_batch.CoverageBatchInput` configuration. It names an existing source plan and
 materialization directory, an explicit sorted list of **one to eight** shard numbers, two pinned
 local tool specifications, a `Phase5Input` ranking specification, and a fresh external output.
-It requires both local research and annotation-execution authorization. A command or configuration
+It requires local research authorization, plus annotation-execution authorization for any shard
+without an explicit reusable annotation. A command or configuration
 file is not authorization to expand a previously approved subset. Materialization remains separate;
 the coordinator neither chooses additional shards nor downloads tools or data.
 
@@ -122,7 +123,8 @@ remains an open gate.
 For each requested shard, an annotation process normalizes and annotates, then exits. A separate
 validation process reconciles source alternate ordinals and GT/GQ and imports every allele,
 transcript consequence and allele/gene candidate. Separate assembly and ranking processes follow.
-Each process runs with a credential-free environment, disabled tracing, discarded stdout/stderr,
+An isolated pair-work preflight runs between assembly and ranking. Each process runs with a
+credential-free environment, disabled tracing, discarded stdout/stderr,
 and a fixed typed dispatcher. Worker working directories are their private stage directories;
 configuration paths must be absolute. Assembly's 256 MB, single-threaded DuckDB checks disable
 spilling, so temporary variant tables cannot fall back to the repository directory. There is no
@@ -160,3 +162,54 @@ mixed or corrupted inputs, and resume after ranking failure without repeating an
 The next private expansion should be a small, explicitly scoped multi-shard pilot, followed by
 review of measured annotation cost, candidate/transcript expansion, pair workload and disk use.
 Eight shards is a hard request cap, not a recommendation to run eight immediately.
+
+### Reusing completed annotations in a fresh batch
+
+The optional `reuse_annotations` mapping selects sealed annotation bundles by requested shard
+number. For example, the following fragment belongs in the private batch configuration:
+
+```json
+{
+  "reuse_annotations": {
+    "1": {
+      "directory": "/private/path/earlier-batch/annotation_000001",
+      "integrity_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  }
+}
+```
+
+Replace the placeholder with the SHA-256 of that bundle's `integrity_manifest.json`. Reuse verifies
+the complete inventory, original source checksum, exact tagged subset, receipt input/output chain,
+executable checksum and full tool configuration except the old input/output locations. It rejects
+symbolic links, overlapping input/output directories, extra artifacts and changed pins. The stage
+copies files into the new batch and checks both copies and originals again before publication;
+it never hard-links or changes the original bundle. Its origin and pin remain in batch identity.
+
+Reuse saves external normalization and annotation. Validation, genotype reconciliation, ingestion,
+global assembly and ranking run with the current implementation. Historical validation proofs or
+rankings are not imported, and code-bound resume checks remain unchanged. This permits an older
+annotation bundle to be used with a new implementation without pretending that its old analysis
+was produced by the new code. Existing tool/reference checks and cache limitations still apply.
+
+If every requested shard has a reuse entry, `confirmed_annotation_execution` may be false. A mixed
+batch still requires authorization for new annotation; it executes tools only for unlisted shards.
+Local research authorization remains mandatory. These fields record authorization; setting them
+does not grant permission to expand the approved private scope.
+
+### Global pair-work preflight
+
+The committed `pair_preflight/pair_workload.json` binds an exact count to the assembled input's
+integrity checksum. Counting uses the same function as inheritance execution: heterozygous
+candidates with assigned genes are grouped by case-insensitive gene and chromosome, then each
+group contributes `n*(n-1)/2`. Unknown gene placeholders and NULL chromosomes cannot define pairs.
+Gene whitespace is not silently normalized for grouping. Integer arithmetic avoids rounding;
+no pairs or pair payloads are materialized during counting.
+
+The preflight considers all assembled candidates, including cross-shard combinations, because the
+conservative branch retains the full source. The report stays private and records whether the
+unchanged 100,000-pair budget is satisfied. A larger count commits the report but prevents ranking
+from starting, including on resume. Annotation, validation and assembly remain available. It never
+filters candidates or changes the cap to make the run pass. Execution also retains its own
+branch-specific budget check. The count measures enumeration work, not retained evidence, causal
+accuracy, runtime or memory guarantees; the existing live resource supervisor remains mandatory.

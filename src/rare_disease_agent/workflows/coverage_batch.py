@@ -13,15 +13,20 @@ from contextlib import suppress
 from pathlib import Path
 from uuid import uuid4
 
+import duckdb
 import psutil
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from rare_disease_agent.resource_management import atomic_json, sha256
 from rare_disease_agent.tools.variants.adapters import ToolJob, execute_job
+from rare_disease_agent.tools.variants.pair_workload import PAIR_WORK_BUDGET, count_pair_work
 from rare_disease_agent.workflows.assembly import (
     assemble_verified,
+    read_json,
     seal,
     validate_shard,
+    verified,
+    verify_assembly,
     verify_partition,
 )
 from rare_disease_agent.workflows.partitioning import _private
@@ -36,6 +41,12 @@ class PinnedTool(BaseModel):
     job: ToolJob  # Input/output paths are templates, replaced only by fixed stage-owned paths.
 
 
+class ReusedAnnotation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    directory: Path
+    integrity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class CoverageBatchInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     plan: Path
@@ -47,6 +58,7 @@ class CoverageBatchInput(BaseModel):
     output: Path
     confirmed_local_research_use: bool
     confirmed_annotation_execution: bool
+    reuse_annotations: dict[int, ReusedAnnotation] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def bounded_scope(self):
@@ -68,6 +80,10 @@ class CoverageBatchInput(BaseModel):
         )
         if any(path is None or not path.is_absolute() for path in absolute_paths):
             raise ValueError("Batch inputs and outputs require absolute local paths")
+        if not self.reuse_annotations.keys() <= set(self.shards) or any(
+            not item.directory.is_absolute() for item in self.reuse_annotations.values()
+        ):
+            raise ValueError("Annotation reuse must name absolute paths for requested shards")
         if (
             self.shards != sorted(set(self.shards))
             or any(type(x) is not int or not 1 <= x <= 100_000 for x in self.shards)
@@ -98,15 +114,110 @@ class CoverageBatchInput(BaseModel):
         return self
 
 
-def batch_identity(spec: CoverageBatchInput) -> dict:
+def check_authorization(spec: CoverageBatchInput):
     if not (
         spec.confirmed_local_research_use
-        and spec.confirmed_annotation_execution
         and spec.ranking.confirmed_local_research_use
+        and (spec.confirmed_annotation_execution or set(spec.reuse_annotations) == set(spec.shards))
     ):
         raise PermissionError(
-            "Explicit bounded annotation and local research authorization required"
+            "Explicit local research and any new annotation authorization required"
         )
+
+
+def reuse_identity(spec: CoverageBatchInput, number: int) -> dict:
+    """Pin source bytes and full tool configuration; never adopt old ingestion or ranking."""
+    item = spec.reuse_annotations[number]
+    source = item.directory
+    _private(source)
+    if (
+        source.is_symlink()
+        or source.resolve().is_relative_to(spec.output.resolve())
+        or spec.output.resolve().is_relative_to(source.resolve())
+    ):
+        raise ValueError("Reused annotation must be separate from batch output")
+    manifest, _ = verify_partition(spec.plan, spec.partitions / f"shard_{number:06d}")
+    if sha256(source / "integrity_manifest.json") != item.integrity_sha256:
+        raise ValueError("Reused annotation seal differs from explicit pin")
+    contents = verified(source)
+    required = {
+        "subset.vcf",
+        "normalized.vcf",
+        "annotated.vcf",
+        "run_manifest.json",
+        "normalization.receipt.json",
+        "annotation.receipt.json",
+    }
+    if set(contents) != required:
+        raise ValueError("Unsupported reused annotation inventory")
+    prior = read_json(source / "run_manifest.json")
+    if (
+        prior.get("status") != "completed"
+        or prior.get("source_sha256") != manifest["source_sha256"]
+        or contents["subset.vcf"] != sha256(spec.partitions / f"shard_{number:06d}" / "subset.vcf")
+    ):
+        raise ValueError("Reused annotation source mismatch")
+    for name, tool, incoming, outgoing in (
+        ("normalization", spec.normalization, "subset.vcf", "normalized.vcf"),
+        ("annotation", spec.annotation, "normalized.vcf", "annotated.vcf"),
+    ):
+        receipt = read_json(source / (name + ".receipt.json"))
+        configuration = receipt["configuration"]
+        if (
+            {k: v for k, v in configuration.items() if k not in {"input_path", "output_path"}}
+            != tool.job.model_dump(mode="json", exclude={"input_path", "output_path"})
+            or receipt["provider"] != tool.job.provider
+            or receipt["executable_sha256"] != tool.executable_sha256
+            or receipt["returncode"] != 0
+            or receipt["input_sha256"] != contents[incoming]
+            or receipt["output_sha256"] != contents[outgoing]
+            or receipt["reference_sha256"] != tool.job.reference_sha256
+            or receipt["tool_version"] != tool.job.tool_version
+            or receipt["data_version"] != tool.job.data_version
+        ):
+            raise ValueError("Reused annotation tool or receipt mismatch")
+    return contents
+
+
+def import_annotation(spec: CoverageBatchInput, number: int, output: Path):
+    before = reuse_identity(spec, number)
+    source = spec.reuse_annotations[number].directory
+    for name in [*before, "integrity_manifest.json"]:
+        shutil.copyfile(source / name, output / name)
+    if verified(output) != before or reuse_identity(spec, number) != before:
+        raise ValueError("Reused annotation changed while copying")
+    if (
+        sha256(output / "integrity_manifest.json")
+        != spec.reuse_annotations[number].integrity_sha256
+    ):
+        raise ValueError("Reused annotation seal changed while copying")
+
+
+def pair_preflight(spec: CoverageBatchInput, output: Path):
+    directory = spec.output / "assembly"
+    verify_assembly(directory)
+    before = sha256(directory / "integrity_manifest.json")
+    with duckdb.connect(config={"memory_limit": "256MB", "threads": 1, "temp_directory": ""}) as db:
+        db.from_parquet(str(directory / "tables" / "variants.parquet")).create_view("variants")
+        count = count_pair_work(db)
+    verify_assembly(directory)
+    if sha256(directory / "integrity_manifest.json") != before:
+        raise ValueError("Assembly changed during pair preflight")
+    atomic_json(
+        output / "pair_workload.json",
+        {
+            "assembly_integrity_sha256": before,
+            "eligible_candidate_pairs": count,
+            "pair_work_budget": PAIR_WORK_BUDGET,
+            "within_budget": count <= PAIR_WORK_BUDGET,
+            "scope": "all assembled candidates; global same-gene/chromosome enumeration",
+            "retained_pair_count_assessed": False,
+        },
+    )
+
+
+def batch_identity(spec: CoverageBatchInput) -> dict:
+    check_authorization(spec)
     paths = (
         spec.plan,
         spec.partitions,
@@ -153,6 +264,7 @@ def batch_identity(spec: CoverageBatchInput) -> dict:
         "phenotype_sha256": sha256(spec.ranking.phenotype_docx),
         "index_sha256": sha256(spec.ranking.original_index),
         "hpo_manifest_sha256": sha256(spec.ranking.hpo_directory / "manifest.json"),
+        "reused_annotations": {str(n): reuse_identity(spec, n) for n in spec.reuse_annotations},
     }
 
 
@@ -201,14 +313,24 @@ def annotate_shard(spec: CoverageBatchInput, number: int, output: Path):
 
 def run_stage(spec: CoverageBatchInput, stage: str, output: Path):
     """Fixed dispatcher; accepts neither arbitrary commands nor SQL."""
-    if not (spec.confirmed_annotation_execution and spec.confirmed_local_research_use):
-        raise PermissionError("Explicit batch authorization required")
+    check_authorization(spec)
     _private(spec.plan, spec.partitions, spec.output, output)
     if stage == "assembly":
         assemble_verified(
             spec.plan, [spec.output / f"validation_{n:06d}" for n in spec.shards], output
         )
+    elif stage == "pair_preflight":
+        pair_preflight(spec, output)
     elif stage == "ranking":
+        report = read_json(spec.output / "pair_preflight" / "pair_workload.json")
+        if (
+            report["assembly_integrity_sha256"]
+            != sha256(spec.output / "assembly" / "integrity_manifest.json")
+            or report["pair_work_budget"] != PAIR_WORK_BUDGET
+            or report["within_budget"] is not True
+            or not 0 <= report["eligible_candidate_pairs"] <= PAIR_WORK_BUDGET
+        ):
+            raise ValueError("Global pair preflight blocks ranking; preserve all candidates")
         ranking = spec.ranking.model_copy(update={"output": output / "run"})
         phase5_run(ranking)
     else:
@@ -221,7 +343,10 @@ def run_stage(spec: CoverageBatchInput, stage: str, output: Path):
             raise ValueError("Unknown fixed batch stage")
         prefix, number = allowed[stage]
         if prefix == "annotation":
-            annotate_shard(spec, number, output)
+            if number in spec.reuse_annotations:
+                import_annotation(spec, number, output)
+            else:
+                annotate_shard(spec, number, output)
         else:
             validate_shard(
                 spec.plan,
@@ -348,7 +473,7 @@ def run_batch(spec: CoverageBatchInput):
         stages = [
             f"{prefix}_{n:06d}" for n in spec.shards for prefix in ("annotation", "validation")
         ]
-        for stage in [*stages, "assembly", "ranking"]:
+        for stage in [*stages, "assembly", "pair_preflight", "ranking"]:
             if code_checksum() != configuration["code_sha256"]:
                 raise ValueError("Implementation changed during batch")
             runner.stage(stage, lambda output, stage=stage: supervise_stage(spec, stage, output))
