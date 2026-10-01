@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from itertools import islice
 from pathlib import Path
 from typing import Any
@@ -413,6 +414,29 @@ class VariantToolbox:
             calls=calls,
         )
 
+    def _pair_genotypes(self, pairs: list[tuple[str, str]]) -> Iterator[list[VariantGenotypes]]:
+        """Decode at most 256 candidates once, preserving the ordered pair stream."""
+        if len(pairs) > 128:
+            raise ValueError("Pair read batch exceeds work budget")
+        if not pairs:
+            return
+        identifiers = list(dict.fromkeys(identifier for pair in pairs for identifier in pair))
+        placeholders = ",".join("?" for _ in identifiers)
+        rows = self.membership._connection.execute(
+            "SELECT variant_id, gene, chromosome, genotype, genotype_calls_json "
+            f"FROM variants WHERE variant_id IN ({placeholders}) ORDER BY _row_id",
+            identifiers,
+        )
+        columns = [item[0] for item in rows.description]
+        candidates = {
+            row[0]: self._variant_genotypes(dict(zip(columns, row, strict=True)))
+            for row in rows.fetchall()
+        }
+        if len(candidates) != len(identifiers):
+            raise VariantToolError("Pair candidate lookup is incomplete")
+        for first, second in pairs:
+            yield [candidates[first], candidates[second]]
+
     def evaluate_inheritance(self, parameters: EvaluateInheritanceParameters) -> ToolObservation:
         if self.inheritance_evaluator is None:
             raise VariantToolError("No pedigree evidence is available for this run.")
@@ -475,16 +499,7 @@ class VariantToolbox:
                     ],
                 )
                 while pairs := cursor.fetchmany(128):
-                    for first, second in pairs:
-                        rows = connection.execute(
-                            "SELECT * FROM variants WHERE variant_id IN (?, ?) ORDER BY _row_id",
-                            [first, second],
-                        )
-                        columns = [item[0] for item in rows.description]
-                        variants = [
-                            self._variant_genotypes(dict(zip(columns, row, strict=True)))
-                            for row in rows.fetchall()
-                        ]
+                    for variants in self._pair_genotypes(pairs):
                         result = self.inheritance_evaluator.evaluate(variants)
                         for pair in result.compound_heterozygous_pairs:
                             pair_batch.append(

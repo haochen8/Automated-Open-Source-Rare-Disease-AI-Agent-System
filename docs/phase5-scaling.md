@@ -39,6 +39,26 @@ A failed operation rolls back both pair rows and pair evidence, including batche
 The synthetic dense-gene regression writes and replaces all 780 pairs under a 64 MB DuckDB limit;
 production memory limits are unchanged. This addresses storage overhead, not quadratic pair growth.
 
+### Bounded candidate reads
+
+Each ordered batch of at most 128 pair IDs fetches only the five genotype-input columns for its
+distinct candidates in one parameterized query. At most 256 candidates are decoded once per batch;
+the cache is discarded between batches. The original pair order and endpoint order are preserved,
+including equal-score evidence replacement. SQL eligibility, evaluator behavior, complete payloads,
+transaction boundaries, ranking and the global 100,000-pair budget remain unchanged. Missing
+candidates fail closed and roll back pair evidence and pair rows.
+
+Three fresh-process synthetic comparisons against `e7c12d9`, with 128 heterozygous candidates in
+one gene (8,128 pairs), reduced candidate retrieval queries from 8,128 to 64. Median inheritance
+evaluation time fell from 11.44 seconds (11.37–11.63) to 3.39 seconds (3.33–3.42). Runs used one
+DuckDB thread, its existing 1 GB production limit and disabled spilling. Complete pair, evidence,
+membership, ranking and observation hashes matched with controlled software provenance; actual
+implementation hashes were recorded separately. Database size remained 6,041,600 bytes, and sampled
+peak process RSS ranges were about 215–217 MiB before and 208–213 MiB after. A separate 40-candidate
+comparison also matched under 64 MB. An initial 128-candidate baseline attempt exceeded 64 MB;
+the smaller stress test and production resource limits were not changed. These synthetic timings
+measure bounded evaluation only and do not establish whole-case runtime or coverage.
+
 ## Remaining expansion gates
 
 Use the sampler only within its existing cap. For disjoint coverage preparation, use the interface
