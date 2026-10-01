@@ -14,9 +14,10 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
+from typing import Annotated
 
 import psutil
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from rare_disease_agent.resource_management import atomic_json, sha256
 from rare_disease_agent.tools.variants.ingest import info_fields, vcf_rows
@@ -42,7 +43,22 @@ class CoverageInput(BaseModel):
     source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     output: Path
     records_per_shard: int = Field(default=500, strict=True, ge=1, le=500)
+    shard_record_limits: dict[int, Annotated[int, Field(strict=True, ge=1, le=500)]] = Field(
+        default_factory=dict, max_length=8
+    )
     confirmed_local_research_use: bool
+
+    @model_validator(mode="after")
+    def bounded_overrides(self):
+        if any(
+            not 1 <= number <= MAX_PARTITIONS or limit > self.records_per_shard
+            for number, limit in self.shard_record_limits.items()
+        ):
+            raise ValueError("Shard overrides may only reduce the default record limit")
+        return self
+
+    def record_limit(self, number: int) -> int:
+        return self.shard_record_limits.get(number, self.records_per_shard)
 
 
 class _Budget:
@@ -195,7 +211,7 @@ def prepare_coverage(spec: CoverageInput) -> dict:
                     current is None
                     or current["chromosome"] != chrom
                     or current["disposition"] != reason
-                    or (eligible and current["source_records"] >= spec.records_per_shard)
+                    or (eligible and current["source_records"] >= spec.record_limit(shards))
                 ):
                     flush()
                     if eligible:
@@ -220,6 +236,8 @@ def prepare_coverage(spec: CoverageInput) -> dict:
                 total["source_records"] += 1
                 total["alternate_alleles"] += alternate_count
             flush()
+        if any(number > shards for number in spec.shard_record_limits):
+            raise ValueError("Record-limit override names a nonexistent shard")
         with (staging / "header.txt").open("x") as stream:
             budget.write(stream, "\n".join(header) + "\n")
         if sha256(source) != spec.source_sha256 or code_checksum() != implementation:
@@ -230,6 +248,7 @@ def prepare_coverage(spec: CoverageInput) -> dict:
             "source_sha256": spec.source_sha256,
             "code_sha256": implementation,
             "records_per_shard": spec.records_per_shard,
+            "shard_record_limits": spec.shard_record_limits,
             "shards": shards,
             "counts": counts,
             "source_records": sum(x["source_records"] for x in counts.values()),
@@ -272,6 +291,14 @@ def materialize_partitions(
         raise ValueError("Coverage manifest exceeds work budget")
     manifest_digest = sha256(manifest_path)
     manifest = json.loads(manifest_path.read_text())
+    schedule = CoverageInput(
+        source=manifest["source"],
+        source_sha256=manifest["source_sha256"],
+        output=output,
+        records_per_shard=manifest["records_per_shard"],
+        shard_record_limits=manifest.get("shard_record_limits", {}),
+        confirmed_local_research_use=True,
+    )
     if (
         manifest["version"] != VERSION
         or manifest["code_sha256"] != code_checksum()
@@ -327,10 +354,9 @@ def materialize_partitions(
                     selected = segment["shard"] is not None and first <= segment["shard"] <= last
                     if segment["shard"] is not None:
                         observed_shards += 1
-                        if (
-                            segment["shard"] != observed_shards
-                            or not 1 <= segment["source_records"] <= manifest["records_per_shard"]
-                        ):
+                        if segment["shard"] != observed_shards or not 1 <= segment[
+                            "source_records"
+                        ] <= schedule.record_limit(observed_shards):
                             raise ValueError("Partition shard sequence does not reconcile")
 
                     def consume(directory=None, segment=segment):
@@ -390,6 +416,7 @@ def materialize_partitions(
                 or previous != manifest["source_records"]
                 or observed_counts != manifest["counts"]
                 or observed_shards != manifest["shards"]
+                or any(number > observed_shards for number in schedule.shard_record_limits)
             ):
                 raise ValueError("Full source accounting mismatch")
             if (

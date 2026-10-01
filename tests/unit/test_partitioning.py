@@ -302,3 +302,64 @@ def test_partitioned_ingestion_matches_control_and_preserves_cross_shard_pairs(t
     assert any(
         pair.variant_a.startswith("r1_") and pair.variant_b.startswith("r2_") for pair in pairs
     )
+
+
+def test_smaller_increment_preserves_prefix_and_all_remaining_source_records(tmp_path):
+    text = "".join(row("1", n, alt="C,G", gt="1/2") for n in range(1, 13))
+    original, old_output = setup(tmp_path, text, size=3)
+    p.prepare_coverage(original)
+    p.materialize_partitions(original.output, old_output, first=1, last=4, authorized=True)
+    adjusted = p.CoverageInput.model_validate(
+        original.model_dump()
+        | {
+            "output": tmp_path / "adjusted-plan",
+            "shard_record_limits": {3: 1},
+        }
+    )
+    manifest = p.prepare_coverage(adjusted)
+    output = tmp_path / "adjusted-partitions"
+    p.materialize_partitions(adjusted.output, output, first=1, last=5, authorized=True)
+    assert manifest["source_records"] == 12 and manifest["alternate_alleles"] == 24
+    assert manifest["shard_record_limits"] == {3: 1}
+    for n in [1, 2]:
+        assert (old_output / f"shard_{n:06d}" / "subset.vcf").read_bytes() == (
+            output / f"shard_{n:06d}" / "subset.vcf"
+        ).read_bytes()
+    selected = [r for n in range(1, 6) for r in records(output / f"shard_{n:06d}" / "subset.vcf")]
+    assert [int(info_fields(r[7])["RDA_SOURCE_ROW"]) for r in selected] == list(range(1, 13))
+    assert all(info_fields(r[7])["RDA_ALT_IDX"] == "1,2" and r[9] == "1/2:90" for r in selected)
+    assert len(records(output / "shard_000003" / "subset.vcf")) == 1
+    assert len(records(output / "shard_000004" / "subset.vcf")) == 3
+    before = (output / "shard_000003" / "subset.vcf").read_bytes()
+    p.materialize_partitions(adjusted.output, output, first=3, last=3, authorized=True)
+    assert (output / "shard_000003" / "subset.vcf").read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{0: 1}, {100001: 1}, {1: 0}, {1: 4}, {1: True}, {1: 1.5}, {i: 1 for i in range(1, 10)}],
+)
+def test_shard_overrides_cannot_increase_or_bypass_existing_bounds(tmp_path, overrides):
+    spec, _ = setup(tmp_path, size=3)
+    with pytest.raises(ValueError):
+        p.CoverageInput.model_validate(spec.model_dump() | {"shard_record_limits": overrides})
+
+
+def test_nonexistent_override_never_publishes_plan(tmp_path):
+    spec, _ = setup(tmp_path, size=3)
+    spec = p.CoverageInput.model_validate(spec.model_dump() | {"shard_record_limits": {2: 1}})
+    with pytest.raises(ValueError, match="nonexistent shard"):
+        p.prepare_coverage(spec)
+    assert not spec.output.exists()
+
+
+def test_materialization_enforces_record_limit_override(tmp_path):
+    spec, output = setup(tmp_path, size=3)
+    p.prepare_coverage(spec)
+    path = spec.output / "manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["shard_record_limits"] = {"1": 1}
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="shard sequence"):
+        p.materialize_partitions(spec.output, output, authorized=True)
+    assert not (output / "shard_000001").exists()

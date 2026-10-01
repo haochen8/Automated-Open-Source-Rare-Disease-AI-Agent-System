@@ -100,6 +100,27 @@ sampled local resource checks: one hour, 1 GiB process RSS, 256 MiB minimum avai
 artifacts on resume; it is a preparation safeguard, not permission to stage an entire genome.
 Paths and derived summaries remain outside Git; CLI output includes only fixed success/error labels.
 
+### Smaller increments after completed shards
+
+An optional `shard_record_limits` mapping in `CoverageInput` can reduce the record limit for up to
+eight explicitly numbered shards, for example `"shard_record_limits": {"5": 50}` with the default
+500 records per shard. Every override must be an integer from 1 to the default limit, and its shard
+must exist in the resulting plan. Defaults and the 500-record maximum remain unchanged. Contig and
+eligibility boundaries may still make a shard shorter than its configured limit.
+
+Use a fresh plan and materialization directory. Shards preceding the first override keep their
+original boundaries and exact tagged source bytes when the source and default size are unchanged;
+their annotations can therefore pass the normal pinned-reuse checks. The smaller shard covers the
+next contiguous source records. Later shards continue immediately afterward using their configured
+limits. No records are dropped, selected by score, or silently duplicated; the full source ledger
+still accounts for all deferred and unprocessed records. Materialization validates each shard
+against its specific limit and retains the existing immutable resume checks.
+
+This permits a smaller, explicitly authorized next increment when pair workload limits expansion.
+It does not predict unseen annotation growth, waive global pair preflight, or authorize new
+annotation. All previously analyzed candidates must remain in a cumulative assembly; shrinking a
+future increment must not be used to discard existing evidence to make a run pass.
+
 ## Verified global assembly and process isolation
 
 `phase5 coverage-batch /private/path/batch.json` accepts a private
