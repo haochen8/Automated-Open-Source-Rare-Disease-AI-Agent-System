@@ -12,6 +12,7 @@ from rare_disease_agent.tools.inheritance.schemas import (
     InheritanceEvidence,
     InheritanceModel,
     InheritanceSummary,
+    PairInheritanceEvaluation,
     Pedigree,
     VariantGenotypes,
 )
@@ -341,18 +342,10 @@ class InheritanceEvaluator:
             return "paternal"
         return "unknown"
 
-    def evaluate(self, variants: list[VariantGenotypes]) -> InheritanceEvaluation:
+    def _compound_endpoint_evidence(
+        self, variants: list[VariantGenotypes], pairs: list[CompoundHeterozygousPair]
+    ) -> list[InheritanceEvidence]:
         evidence: list[InheritanceEvidence] = []
-        for variant in variants:
-            evidence.extend(
-                [
-                    self.evaluate_de_novo(variant),
-                    self.evaluate_dominant(variant),
-                    self.evaluate_homozygous_recessive(variant),
-                    self.evaluate_x_linked(variant),
-                ]
-            )
-        pairs = self.find_compound_heterozygous_pairs(variants)
         for pair in pairs:
             for variant_id in (pair.variant_a, pair.variant_b):
                 variant = next(item for item in variants if item.variant_id == variant_id)
@@ -367,6 +360,36 @@ class InheritanceEvaluator:
                         required_calls=[proband, mother, father],
                     )
                 )
+        return evidence
+
+    def evaluate_pair(
+        self, first: VariantGenotypes, second: VariantGenotypes
+    ) -> PairInheritanceEvaluation:
+        """Preserve the general evaluator's ordered compound and recessive outputs."""
+        variants = [first, second]
+        # SQL row genotypes and decoded calls can differ. A homozygous baseline is
+        # still needed, including when the decoded calls cannot form a pair.
+        homozygous = [self.evaluate_homozygous_recessive(variant) for variant in variants]
+        pairs = self.find_compound_heterozygous_pairs(variants)
+        compound = self._compound_endpoint_evidence(variants, pairs)
+        recessive = self._autosomal_recessive_evidence(variants, homozygous + compound)
+        return PairInheritanceEvaluation(
+            evidence=compound + recessive, compound_heterozygous_pairs=pairs
+        )
+
+    def evaluate(self, variants: list[VariantGenotypes]) -> InheritanceEvaluation:
+        evidence: list[InheritanceEvidence] = []
+        for variant in variants:
+            evidence.extend(
+                [
+                    self.evaluate_de_novo(variant),
+                    self.evaluate_dominant(variant),
+                    self.evaluate_homozygous_recessive(variant),
+                    self.evaluate_x_linked(variant),
+                ]
+            )
+        pairs = self.find_compound_heterozygous_pairs(variants)
+        evidence.extend(self._compound_endpoint_evidence(variants, pairs))
         evidence.extend(self._autosomal_recessive_evidence(variants, evidence))
         summaries = []
         models: list[InheritanceModel] = [

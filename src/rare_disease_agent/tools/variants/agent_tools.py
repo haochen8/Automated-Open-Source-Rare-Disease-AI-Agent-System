@@ -500,7 +500,7 @@ class VariantToolbox:
                 )
                 while pairs := cursor.fetchmany(128):
                     for variants in self._pair_genotypes(pairs):
-                        result = self.inheritance_evaluator.evaluate(variants)
+                        result = self.inheritance_evaluator.evaluate_pair(*variants)
                         for pair in result.compound_heterozygous_pairs:
                             pair_batch.append(
                                 {

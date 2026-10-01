@@ -110,12 +110,16 @@ def toolbox(source, database, cls=VariantToolbox, affected=None):
         run_id="synthetic-batched",
         software=IDENTITY,
     )
-    return cls(
+    box = cls(
         source,
         run_id="synthetic-batched",
         membership_database=database,
         inheritance_evaluator=evaluator,
     )
+    if cls is PerPairReads:
+        # Keep the full evaluator as the oracle when production uses its pair path.
+        evaluator.evaluate_pair = lambda first, second: evaluator.evaluate([first, second])
+    return box
 
 
 def snapshot(box):
@@ -162,14 +166,13 @@ def test_full_pair_payload_evidence_order_and_ranking_match_reference(tmp_path, 
             ["synthetic-001'quoted"],
         )
         observed = []
-        evaluate = box.inheritance_evaluator.evaluate
+        evaluate = box.inheritance_evaluator.evaluate_pair
 
-        def record(variants, observed=observed, evaluate=evaluate):
-            if len(variants) == 2:
-                observed.append([v.model_dump() for v in variants])
-            return evaluate(variants)
+        def record(first, second, observed=observed, evaluate=evaluate):
+            observed.append([v.model_dump() for v in [first, second]])
+            return evaluate(first, second)
 
-        box.inheritance_evaluator.evaluate = record
+        box.inheritance_evaluator.evaluate_pair = record
         try:
             observation = box.evaluate_inheritance(EvaluateInheritanceParameters(branch="assessed"))
             first = snapshot(box)

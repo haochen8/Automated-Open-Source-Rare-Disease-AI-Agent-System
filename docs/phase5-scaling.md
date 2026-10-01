@@ -59,6 +59,29 @@ comparison also matched under 64 MB. An initial 128-candidate baseline attempt e
 the smaller stress test and production resource limits were not changed. These synthetic timings
 measure bounded evaluation only and do not establish whole-case runtime or coverage.
 
+### Pair-specific evaluation
+
+The persistent pair loop calls `evaluate_pair(first, second)`, which returns complete pair payloads
+and ordered compound-heterozygous and autosomal-recessive endpoint evidence. It reuses the general
+evaluator's pair finder, endpoint construction and recessive reduction. It omits de novo, dominant,
+X-linked and summary calculations that this loop does not consume. General `evaluate()` and the
+single-candidate evidence pass retain all models and summaries.
+
+Both homozygous-recessive baselines remain necessary: decoded genotype calls can disagree with the
+SQL row genotype. Even when no compound pair is formed, both autosomal-recessive outputs must be
+retained. Pair confidence, endpoint quality caps, unknown affected status, warning order and the
+strongest-score/last-equal-score reduction are unchanged. No storage, version-validation, eligibility,
+work-budget or resource-limit change accompanies this optimization.
+
+Three fresh-process synthetic comparisons against frozen evaluator and toolbox code from `83cabb3`
+used the same 128-candidate, 8,128-pair workload and controlled provenance. Median inheritance time
+fell from 3.40 seconds (3.38–3.41) to 2.45 seconds (2.45–2.62), about 28% less time. All complete pair,
+evidence, membership, ranking and observation hashes matched. Database size remained 6,041,600 bytes;
+sampled peak process RSS was approximately 205–209 MiB before and 209–216 MiB after. The separate
+40-candidate comparison passed at 64 MB with exact matching outputs. These are synthetic evaluation
+measurements, not a whole-case forecast. Historical private replays remain tied to their recorded
+source-code identity and must not be relabeled as validation of a newer implementation.
+
 ## Remaining expansion gates
 
 Use the sampler only within its existing cap. For disjoint coverage preparation, use the interface

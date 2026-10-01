@@ -137,24 +137,23 @@ def test_compound_pair_failure_rolls_back_pair_table_and_pair_evidence(tmp_path,
         membership_database=tmp_path / "pairs.duckdb",
         inheritance_evaluator=evaluator,
     )
-    original = evaluator.evaluate
+    original = evaluator.evaluate_pair
     calls = 0
 
-    def interrupted(variants):
+    def interrupted(first, second):
         nonlocal calls
-        if len(variants) == 2:
-            calls += 1
-            if calls == 140:
-                assert (
-                    toolbox.membership._connection.execute(
-                        "SELECT count(*) FROM compound_pairs"
-                    ).fetchone()[0]
-                    == 128
-                )
-                raise RuntimeError("synthetic pair interruption")
-        return original(variants)
+        calls += 1
+        if calls == 140:
+            assert (
+                toolbox.membership._connection.execute(
+                    "SELECT count(*) FROM compound_pairs"
+                ).fetchone()[0]
+                == 128
+            )
+            raise RuntimeError("synthetic pair interruption")
+        return original(first, second)
 
-    monkeypatch.setattr(evaluator, "evaluate", interrupted)
+    monkeypatch.setattr(evaluator, "evaluate_pair", interrupted)
     try:
         with pytest.raises(RuntimeError, match="synthetic pair"):
             toolbox.evaluate_inheritance(EvaluateInheritanceParameters(branch="all"))
@@ -166,7 +165,7 @@ def test_compound_pair_failure_rolls_back_pair_table_and_pair_evidence(tmp_path,
             ).fetchone()[0]
             == 0
         )
-        monkeypatch.setattr(evaluator, "evaluate", original)
+        monkeypatch.setattr(evaluator, "evaluate_pair", original)
         toolbox.evaluate_inheritance(EvaluateInheritanceParameters(branch="all"))
         assert db.execute("SELECT count(*) FROM compound_pairs").fetchone()[0] == 276
         assert (

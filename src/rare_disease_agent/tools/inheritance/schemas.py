@@ -200,3 +200,12 @@ class InheritanceEvaluation(BaseModel):
     evidence: list[InheritanceEvidence]
     compound_heterozygous_pairs: list[CompoundHeterozygousPair]
     summaries: list[InheritanceSummary]
+
+
+class PairInheritanceEvaluation(BaseModel):
+    """Complete pair payloads and the endpoint evidence consumed by persistence."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    evidence: list[InheritanceEvidence]
+    compound_heterozygous_pairs: list[CompoundHeterozygousPair]

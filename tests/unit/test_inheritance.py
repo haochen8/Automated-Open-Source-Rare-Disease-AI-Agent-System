@@ -1,6 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
+from rare_disease_agent.reporting.provenance import SoftwareIdentity
 from rare_disease_agent.synthetic.cases import synthetic_pedigree
 from rare_disease_agent.tools.inheritance.evaluator import InheritanceEvaluator
 from rare_disease_agent.tools.inheritance.schemas import (
@@ -203,3 +204,135 @@ def test_unknown_gene_or_different_chromosome_cannot_define_compound_pair(gene, 
     second = variant(variant_id="second", gene=gene, chromosome=chromosome)
     assert evaluator.find_compound_heterozygous_pairs([first, second]) == []
     assert evaluator.evaluate([first]).evidence
+
+
+PAIR_SOFTWARE = SoftwareIdentity(
+    git_commit="synthetic-pair-oracle", git_dirty=False, python_version="synthetic", dependencies={}
+)
+
+
+@pytest.mark.parametrize("affected", [True, None, False])
+@pytest.mark.parametrize(
+    "first_values,second_values",
+    [
+        ({"mother": "0/1"}, {"father": "0/1"}),
+        ({"mother": "0/1"}, {"mother": "0/1"}),
+        ({"mother": "0/1"}, {"mother": None, "father": None}),
+        ({"mother": None, "father": None}, {"mother": None, "father": None}),
+        ({"proband": "0|1"}, {"proband": "1|0"}),
+        ({"mother": "0/1", "proband_quality": 8}, {"father": "0/1"}),
+        ({"proband": "1/1", "mother": "0/1", "father": "0/1"}, {}),
+        ({"proband": None}, {}),
+        ({"proband": "0/."}, {}),
+        ({"proband": "0/0"}, {}),
+        ({"proband": "1/2"}, {}),
+        ({"gene": "UNKNOWN"}, {"gene": "UNKNOWN"}),
+        ({}, {"chromosome": "2"}),
+        ({"gene": " gene "}, {"chromosome": "chr1"}),
+    ],
+)
+def test_pair_entry_point_matches_complete_filtered_general_evaluation(
+    affected, first_values, second_values
+):
+    pedigree = synthetic_pedigree()
+    pedigree.individual("PROBAND").affected = affected
+    evaluator = InheritanceEvaluator(pedigree, run_id="synthetic-pair", software=PAIR_SOFTWARE)
+    first = variant(variant_id="z-first", **first_values)
+    second = variant(variant_id="a-second", **second_values)
+    before = [v.model_dump() for v in [first, second]]
+    general = evaluator.evaluate([first, second])
+    pair = evaluator.evaluate_pair(first, second)
+    assert pair.compound_heterozygous_pairs == general.compound_heterozygous_pairs
+    assert pair.evidence == [
+        e for e in general.evidence if e.model in {"compound_heterozygous", "autosomal_recessive"}
+    ]
+    assert [v.model_dump() for v in [first, second]] == before
+    assert [e.variant_id for e in pair.evidence if e.model == "autosomal_recessive"] == [
+        "z-first",
+        "a-second",
+    ]
+    if first_values.get("proband") == "1/1":
+        assert pair.compound_heterozygous_pairs == []
+        assert pair.evidence[0].fit == (0.5 if affected is None else 1.0)
+        assert "No recessive genotype pattern identified." not in pair.evidence[0].warnings
+
+
+@pytest.mark.parametrize("case", ["missing_calls", "low_parent_quality", "low_fraction"])
+def test_pair_entry_point_preserves_missing_calls_and_endpoint_quality(case):
+    evaluator = InheritanceEvaluator(
+        synthetic_pedigree(), run_id="synthetic-quality", software=PAIR_SOFTWARE
+    )
+    first = variant(variant_id="first", mother="0/1")
+    second = variant(variant_id="second", father="0/1")
+    if case == "missing_calls":
+        first.calls = []
+    elif case == "low_parent_quality":
+        first.calls[1].quality = 8
+    else:
+        first.calls[0].alternate_fraction = 0.1
+    full = evaluator.evaluate([first, second])
+    pair = evaluator.evaluate_pair(first, second)
+    assert pair.compound_heterozygous_pairs == full.compound_heterozygous_pairs
+    assert pair.evidence == [
+        e for e in full.evidence if e.model in {"compound_heterozygous", "autosomal_recessive"}
+    ]
+
+
+def test_pair_endpoint_payloads_have_independent_expected_explanations_and_provenance():
+    evaluator = InheritanceEvaluator(
+        synthetic_pedigree(), run_id="synthetic-payload", software=PAIR_SOFTWARE
+    )
+    first = variant(variant_id="first", mother="0/1", proband_quality=8)
+    second = variant(variant_id="second", mother=None, father=None)
+    pair_warning = "Only one parental origin is informative; trans is possible."
+    quality_warning = "Low genotype quality for: PROBAND."
+
+    def provenance(method):
+        return {
+            "tool_version": "inheritance-evaluator-v2",
+            "data_version": "pedigree-input-v1",
+            "method": method,
+            "parameters": {"minimum_genotype_quality": 20},
+            "git_commit": "synthetic-pair-oracle",
+            "git_dirty": False,
+            "run_id": "synthetic-payload",
+        }
+
+    expected = []
+    for model in ["compound_heterozygous", "autosomal_recessive"]:
+        for ident in ["first", "second"]:
+            compound = model == "compound_heterozygous"
+            expected.append(
+                {
+                    "variant_id": ident,
+                    "gene": "GENE",
+                    "model": model,
+                    "fit": 0.5 if ident == "first" else 0.65,
+                    "proband_genotype": "0/1",
+                    "mother_genotype": "0/1" if ident == "first" else None,
+                    "father_genotype": "0/0" if ident == "first" else None,
+                    "quality_checks_passed": ident != "first",
+                    "evidence": []
+                    if compound
+                    else ["Best homozygous or compound-heterozygous recessive evidence."],
+                    "warnings": ([pair_warning] if compound else [])
+                    + ([quality_warning] if ident == "first" else []),
+                    "provenance": provenance(model),
+                }
+            )
+    result = evaluator.evaluate_pair(first, second).model_dump()
+    assert result == {
+        "evidence": expected,
+        "compound_heterozygous_pairs": [
+            {
+                "gene": "GENE",
+                "variant_a": "first",
+                "variant_b": "second",
+                "phase": "possible_trans",
+                "confidence": 0.65,
+                "evidence": [],
+                "warnings": [pair_warning],
+                "provenance": provenance("compound_heterozygous"),
+            }
+        ],
+    }
