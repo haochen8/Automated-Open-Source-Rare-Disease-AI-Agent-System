@@ -112,6 +112,81 @@ def test_synonyms_never_choose_between_references_or_merge_source_records():
         synonym_reference_plan(["alias\t40\t5"], {"first": 40}, {"first"}, ["alias first"])
 
 
+@pytest.mark.parametrize("cache_available", [False, True], ids=["cache-missing", "cache-present"])
+@pytest.mark.parametrize("reverse", [False, True], ids=["alias-first", "exact-first"])
+@pytest.mark.parametrize(
+    ("synonyms", "consider_name_prefixes"),
+    [
+        (["alias\tfirst"], False),
+        (["alias\tintermediate", "intermediate\tfirst"], False),
+        (["chralias\tfirst"], True),
+    ],
+    ids=["direct", "transitive", "explicit-prefix"],
+)
+def test_synonym_collisions_are_rejected_independently_of_cache(
+    cache_available, reverse, synonyms, consider_name_prefixes
+):
+    from rare_disease_agent.workflows.coverage import synonym_reference_plan
+
+    statistics = ["alias\t40\t5", "first\t40\t2"]
+    if reverse:
+        statistics.reverse()
+    with pytest.raises(
+        ValueError, match="^Source contigs collide after synonym mapping; reconcile explicitly$"
+    ):
+        synonym_reference_plan(
+            statistics,
+            {"first": 40},
+            {"first"} if cache_available else set(),
+            synonyms,
+            consider_name_prefixes=consider_name_prefixes,
+        )
+
+
+@pytest.mark.parametrize("cache_available", [False, True], ids=["cache-missing", "cache-present"])
+@pytest.mark.parametrize("reverse", [False, True], ids=["forward", "reverse"])
+def test_synonym_noncolliding_classifications_remain_distinct(cache_available, reverse):
+    from rare_disease_agent.workflows.coverage import synonym_reference_plan
+
+    statistics = [
+        "first\t40\t2",
+        "wrong_length\t39\t5",
+        "ambiguous\t80\t7",
+        "missing\t40\t11",
+        "alias\t60\t13",
+    ]
+    if reverse:
+        statistics.reverse()
+    plan = synonym_reference_plan(
+        statistics,
+        {"first": 40, "left": 80, "right": 90, "unique": 60},
+        {"first", "unique"} if cache_available else set(),
+        ["wrong_length\tfirst", "ambiguous\tleft", "left\tright", "alias\tunique"],
+    )
+    assert plan["records"] == 38
+    assert plan["contigs"] == 5
+    assert plan["record_counts"] == {
+        "exact_reference_available": 2 if cache_available else 0,
+        "synonym_reference_available": 13 if cache_available else 0,
+        "reference_missing": 11,
+        "reference_length_mismatch": 5,
+        "ambiguous_reference": 7,
+        "annotation_cache_missing": 0 if cache_available else 15,
+    }
+    assert [row["source"] for row in plan["contig_plan"]] == [
+        line.split("\t")[0] for line in statistics
+    ]
+    assert {row["source"]: row["target"] for row in plan["contig_plan"]} == {
+        "first": "first",
+        "wrong_length": "first",
+        "ambiguous": None,
+        "missing": None,
+        "alias": "unique",
+    }
+    assert plan["renaming_performed"] is False
+    assert plan["sequence_equivalence_verified"] is False
+
+
 def test_prefix_candidates_remain_a_nonmutating_explicit_plan():
     from rare_disease_agent.workflows.coverage import synonym_reference_plan
 

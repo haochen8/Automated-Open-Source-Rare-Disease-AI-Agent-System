@@ -21,7 +21,8 @@ replays and resource measurements must remain outside Git.
 Coverage can be reviewed with the already available VEP cache's `chr_synonyms.txt`, pinned by
 checksum. The planner follows publisher-supplied relationships transitively and requires a unique
 local FASTA target with the expected length. Missing reference, missing annotation cache,
-length mismatch and ambiguous target remain distinct. Colliding source contigs are rejected.
+length mismatch and ambiguous target remain distinct. Source contigs that resolve to the same
+unique, matching-length FASTA target are rejected whether or not its annotation cache is available.
 
 An explicit planning option also considers `chr` prefix conventions and `M`/`MT`, consistent with
 the naming conventions handled by the installed VEP parser. These remain proposals: the planner

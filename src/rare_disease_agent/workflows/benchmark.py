@@ -7,6 +7,8 @@ not a random or disease-enriched sample and cannot establish case-wide coverage.
 from __future__ import annotations
 
 import re
+import shutil
+import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -35,7 +37,7 @@ def select_autosomal_benchmark(source: Path, output: Path, *, per_autosome: int 
         raise ValueError("Autosomal sample size exceeds benchmark budget")
     for path in (source, output):
         _outside_git(path.resolve())
-    if output.exists():
+    if output.exists() or output.is_symlink():
         raise ValueError("Benchmark output already exists")
     fingerprint = sha256(source)
     counts: Counter = Counter()
@@ -72,10 +74,10 @@ def select_autosomal_benchmark(source: Path, output: Path, *, per_autosome: int 
         }
         for key, count in counts.items()
     }
-    output.mkdir(mode=0o700)
+    staging = Path(tempfile.mkdtemp(prefix=".benchmark-", dir=output.parent))
     selected = multiallelic = global_row = 0
     observed: Counter = Counter()
-    temporary = output / "subset.vcf.partial"
+    temporary = staging / "subset.vcf"
     try:
         with temporary.open("x") as stream:
             for line in vcf_rows(source):
@@ -115,7 +117,6 @@ def select_autosomal_benchmark(source: Path, output: Path, *, per_autosome: int 
             or selected != sum(len(x) for x in targets.values())
         ):
             raise ValueError("Benchmark source changed or sampling accounting failed")
-        temporary.rename(output / "subset.vcf")
         metrics = {
             "source_sha256": fingerprint,
             "selection_method": "evenly spaced eligible record ordinals per autosome",
@@ -128,10 +129,14 @@ def select_autosomal_benchmark(source: Path, output: Path, *, per_autosome: int 
             "maximum_records_per_autosome": per_autosome,
             "selected_multiallelic_records": multiallelic,
             "whole_genome_analysis_complete": False,
-            "subset_sha256": sha256(output / "subset.vcf"),
+            "subset_sha256": sha256(temporary),
         }
-        atomic_json(output / "selection.receipt.json", metrics)
+        atomic_json(staging / "selection.receipt.json", metrics)
+        if output.exists() or output.is_symlink():
+            raise ValueError("Benchmark output already exists")
+        staging.rename(output)
         return metrics
     except BaseException:
-        temporary.unlink(missing_ok=True)
+        if staging.exists():
+            shutil.rmtree(staging)
         raise

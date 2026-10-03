@@ -72,17 +72,20 @@ def synonym_reference_plan(
             status = "ambiguous_reference"
         elif reference_lengths[target] != length:
             status = "reference_length_mismatch"
-        elif target not in cache_contigs:
-            status = "annotation_cache_missing"
         else:
-            status = (
-                "exact_reference_available" if source == target else "synonym_reference_available"
-            )
             if target in assigned:
                 raise ValueError(
                     "Source contigs collide after synonym mapping; reconcile explicitly"
                 )
             assigned[target] = source
+            if target not in cache_contigs:
+                status = "annotation_cache_missing"
+            else:
+                status = (
+                    "exact_reference_available"
+                    if source == target
+                    else "synonym_reference_available"
+                )
         counts[status] += count
         contigs[status] += 1
         rows.append(

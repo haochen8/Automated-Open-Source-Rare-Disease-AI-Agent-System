@@ -138,6 +138,14 @@ stratified resource benchmark, not a random sample or an assessment of causal-va
 It rejects reserved provenance tags and conflicting contig aliases before writing a subset.
 Inputs, outputs and selection metrics must be outside Git.
 
+The subset and complete checksum receipt are prepared in a private sibling staging directory,
+then published together by a same-filesystem directory rename. Caught failures before successful
+publication remove only that attempt's staging and leave a fresh destination unpublished for retry.
+An interruption after publication preserves the complete output and propagates the interruption.
+Existing destinations, including symlinks, are refused. Use one selector per destination;
+an uncatchable termination may leave an unpublished staging directory but cannot publish a partial
+subset/receipt pair.
+
 Run `rare-disease-agent phase5 benchmark-select /private/path/config.json --per-autosome 100`
 with an authorized `Phase5Input` configuration whose `annotation_rehearsal` names a fresh directory.
 This command selects records only; normalization, annotation and ranking remain separate steps.
