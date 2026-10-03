@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import subprocess
 from importlib.metadata import distributions
@@ -41,14 +42,30 @@ class RunProvenance(BaseModel):
     hpo_checksum: str
 
 
-def software_identity(repository: Path | str = Path(".")) -> SoftwareIdentity:
-    root = Path(repository)
+def _source_repository() -> Path | None:
+    """Recognize this package's source checkout, including a Git worktree file."""
+    package = Path(__file__).resolve().parents[1]
+    root = package.parent.parent
+    if package.parent.name == "src" and (root / ".git").exists():
+        return root
+    return None
+
+
+def software_identity(repository: Path | str | None = None) -> SoftwareIdentity:
+    """Identify imported source by default; never attribute a worker's data directory."""
+    root = Path(repository) if repository is not None else _source_repository()
+    # Caller Git routing must not redirect either the source or an explicit repository.
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
 
     def git(*arguments: str) -> str:
+        if root is None:
+            return "unknown"
         try:
             completed = subprocess.run(
                 ["git", *arguments],
                 cwd=root,
+                env=environment,
                 check=True,
                 capture_output=True,
                 text=True,

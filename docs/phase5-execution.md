@@ -29,6 +29,15 @@ mandatory. The diagnostic does not expose process names, IDs, paths or raw host 
 
 ## Integrity and representation
 
+Software provenance defaults to the Git checkout containing the imported package's `src` tree,
+including linked worktrees. A worker's private working directory or an unrelated current checkout
+does not select software identity. Inherited Git routing variables are excluded from the local
+lookup; an explicitly supplied repository still selects that repository. Installed packages without
+their own recognized source checkout, or unavailable Git metadata, retain an `unknown` commit.
+Source-code checksums remain the execution/resume identity; Git metadata does not replace them.
+This applies to newly created journals and evidence. Historical artifacts are never rewritten to
+fill in missing Git identity, and the existing changed-code resume refusal remains authoritative.
+
 When resume rejects a changed identity, the diagnostic names only fixed input or provenance
 categories, such as the phenotype document fingerprint, original index path identity, HPO resource
 manifest identity, source-code identity or dataset revision identity. Fingerprints still include
