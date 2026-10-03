@@ -82,6 +82,34 @@ sampled peak process RSS was approximately 205–209 MiB before and 209–216 Mi
 measurements, not a whole-case forecast. Historical private replays remain tied to their recorded
 source-code identity and must not be relabeled as validation of a newer implementation.
 
+### Synthetic analytical capacity trial
+
+A synthetic ladder at source commit `661fc4d` exercised inheritance evidence, all 28 ranking
+contexts, complete pair export, database checkpoint/close and research reporting. Three fresh
+processes with 447 candidates in one gene (99,681 pairs) produced identical ordered evidence,
+pair, membership, ranking and export hashes. Median supervised elapsed time was 40.75 seconds.
+A 448-candidate workload (100,128 potential pairs) was refused without writing pair rows.
+
+A separately approved experiment archived that same source and changed only its pair ceiling
+to 200,000. Production remains at 100,000. Three fresh processes with 632 candidates (199,396
+pairs) took 84.77–86.39 seconds, median 85.27 seconds, with sampled peak process-family RSS of
+1.13–1.77 GiB. Complete hashes matched across repeats and were independently recomputed from
+reopened read-only databases and saved pair exports. A two-gene workload (199,362 pairs) and
+an affected-status case also completed. The 633-candidate workload (200,028 potential pairs)
+was refused with zero saved pair rows. The existing database, RSS, elapsed-time, available-memory,
+disk and accumulating-output guards passed throughout. Archived-source Git provenance is
+`unknown`; a separate commit-pinned source manifest and file comparison establish that the
+experimental cap was the sole source change. This is deliberately modified experimental code,
+not verification of a production cap increase.
+
+The fixtures use mixed phase, parental-origin and quality states, a mock plan, bundled synthetic
+phenotype resources and complete exports. These measurements exclude annotation, validation,
+assembly, production stage publication and resume. They do not establish whole-case capacity or
+accuracy. Doubling pair work approximately doubled runtime; memory varied substantially between
+processes. Retain the production ceiling and obtain target-workload counts and annotation/assembly
+footprints before proposing another capacity increase. A larger ceiling postpones quadratic growth;
+partial pair assessment would require a separate scientific-policy design.
+
 ## Remaining expansion gates
 
 Use the sampler only within its existing cap. For disjoint coverage preparation, use the interface
