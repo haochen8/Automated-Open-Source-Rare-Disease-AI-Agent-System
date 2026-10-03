@@ -406,6 +406,54 @@ def test_import_annotations_without_execution_and_revalidate_current_tables(tmp_
     assert a.read_json(reused.output / "run.json") == journal
 
 
+def test_supervised_reuse_recovers_between_stages_without_rewriting_commits(tmp_path, monkeypatch):
+    spec = setup(tmp_path)
+    validated(spec, monkeypatch)
+    reused = reused_spec(spec, tmp_path)
+    assert reused.confirmed_annotation_execution is False
+    originals = {n: a.inventory(item.directory) for n, item in reused.reuse_annotations.items()}
+    supervise = c.supervise_stage
+
+    def interrupt_before_ranking(spec, stage, output):
+        if stage == "ranking":
+            raise InterruptedError("Synthetic between-stage interruption")
+        return supervise(spec, stage, output)
+
+    monkeypatch.setattr(c, "supervise_stage", interrupt_before_ranking)
+    with pytest.raises(InterruptedError, match="Synthetic between-stage interruption"):
+        c.run_batch(reused)
+    interrupted = a.read_json(reused.output / "run.json")
+    assert interrupted["failure_reason"] == "InterruptedError"
+    assert interrupted["ended_at"] is None
+    assert "pair_preflight" in interrupted["stages"] and "ranking" not in interrupted["stages"]
+    committed = {name: a.inventory(reused.output / name) for name in interrupted["stages"]}
+
+    monkeypatch.setattr(c, "supervise_stage", supervise)
+    c.run_batch(reused)
+    completed = a.read_json(reused.output / "run.json")
+    assert completed["ended_at"] and completed["failure_reason"] is None
+    assert "ranking" in completed["stages"]
+    for name, before in committed.items():
+        assert a.inventory(reused.output / name) == before
+        assert completed["stages"][name] == interrupted["stages"][name]
+    for number, before in originals.items():
+        assert a.inventory(reused.reuse_annotations[number].directory) == before
+        assert a.inventory(reused.output / f"annotation_{number:06d}") == before
+    measurements = [
+        a.read_json(path) for path in (reused.output / "attempts").glob("*.measurement.json")
+    ]
+    assert {item["stage"] for item in measurements} == set(completed["stages"])
+    assert len(measurements) == len(completed["stages"])
+    assert all(
+        item["status"] == "completed" and item["process_returncode"] == 0 for item in measurements
+    )
+
+    attempts = a.inventory(reused.output / "attempts")
+    c.run_batch(reused)
+    assert a.read_json(reused.output / "run.json") == completed
+    assert a.inventory(reused.output / "attempts") == attempts
+
+
 @pytest.mark.parametrize(
     "mutation",
     ["pin", "bytes", "source", "tool", "configuration", "receipt", "extra", "symlink", "overlap"],
