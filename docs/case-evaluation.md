@@ -108,6 +108,13 @@ this is not a replacement for complete run-integrity verification. Symlinked con
 mixed run identities and ambiguous ranks/mappings are refused. Any integrity/schema/read failure
 aborts publication rather than silently removing a case or claiming a biological miss.
 
+Before computing retrieval ranks, every candidate in the selected ranking must have one
+candidate-map row, one variant row and an unambiguous allele-ledger entry. Ranked candidate IDs
+must exactly match unique active membership in the selected branch. These checks include unrelated
+candidates and gene-only evaluations: losing an earlier candidate through a join can improve later
+retrieval ranks incorrectly. Unassigned genes remain in candidate/allele rankings and are excluded
+only from assigned-gene ranks; membership in other branches does not require inclusion in this mode.
+
 Metadata is bounded to 4 MiB, manifests to 1,000 cases and two alleles per case. Evaluation requires
 at least 1 GiB live available memory at entry. DuckDB uses one thread and a 256 MB memory limit;
 disk spilling and automatic extension installation are disabled. Run one evaluation at a time and

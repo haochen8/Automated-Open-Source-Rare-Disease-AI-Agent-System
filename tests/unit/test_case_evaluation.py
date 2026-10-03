@@ -330,6 +330,97 @@ def test_inconsistent_persisted_results_are_not_treated_as_accuracy(tmp_path, fa
     assert not (tmp_path / "out").exists()
 
 
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "ranked_inactive",
+        "active_unranked",
+        "duplicate_membership",
+        "missing_mapping",
+        "duplicate_mapping",
+        "missing_variant",
+        "duplicate_variant",
+        "missing_allele",
+        "duplicate_allele",
+    ],
+)
+def test_gene_only_evaluation_refuses_inconsistent_unlabeled_candidates(tmp_path, fault):
+    run = snapshot(tmp_path / "run")
+    if fault in {"ranked_inactive", "active_unranked", "duplicate_membership"}:
+        stage, name = "deliverables", "private_branch_membership.parquet"
+    else:
+        table = {
+            "mapping": "candidate_map",
+            "variant": "variants",
+            "allele": "alleles",
+        }[fault.split("_")[1]]
+        stage, name = "ingest", f"tables/{table}.parquet"
+    path = run / stage / name
+    table = pq.read_table(path)
+    rows = table.to_pylist()
+    # Corrupt the unrelated first-ranked decoy so truth-target-only checks cannot see it.
+    if fault == "ranked_inactive":
+        next(r for r in rows if r["variant_id"] == "decoy" and r["branch"] == "ensemble")[
+            "active"
+        ] = False
+    elif fault == "active_unranked":
+        rows.append(
+            {"run_id": "synthetic", "variant_id": "filtered", "branch": "ensemble", "active": True}
+        )
+    elif fault == "duplicate_membership":
+        rows.append(
+            next(r for r in rows if r["variant_id"] == "decoy" and r["branch"] == "ensemble")
+        )
+    else:
+        key, value = ("allele_id", "a5") if fault.endswith("allele") else ("variant_id", "decoy")
+        selected = next(r for r in rows if r[key] == value)
+        if fault.startswith("missing"):
+            rows.remove(selected)
+        else:
+            rows.append(selected)
+    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), path)
+    # A committed but inconsistent producer, not a checksum-tampering test.
+    journal = json.loads((run / "run.json").read_text())
+    journal["stages"][stage]["outputs"][name] = sha256(path)
+    (run / "run.json").write_text(json.dumps(journal))
+    before = contents(run)
+    with pytest.raises(ValueError):
+        evaluate_cases(manifest(tmp_path, [label(run, alleles=[])]), tmp_path / "out")
+    assert not (tmp_path / "out").exists()
+    assert contents(run) == before
+
+
+@pytest.mark.parametrize("mode", [MODE, f"conservative_{MODE}"])
+def test_unassigned_candidates_and_other_branches_preserve_retrieval_order(tmp_path, mode):
+    run = snapshot(tmp_path / "run")
+    journal = json.loads((run / "run.json").read_text())
+    path = run / "ingest/tables/candidate_map.parquet"
+    table = pq.read_table(path)
+    rows = table.to_pylist()
+    rows[0].update(gene_id="UNASSIGNED", gene_symbol=None)
+    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), path)
+    journal["stages"]["ingest"]["outputs"]["tables/candidate_map.parquet"] = sha256(path)
+    if mode.startswith("conservative_"):
+        path = run / "deliverables/private_candidate_ranking.parquet"
+        table = pq.read_table(path)
+        rows = table.to_pylist()
+        # The conservative branch also retains the ensemble-filtered candidate.
+        rows.append({**rows[-1], "variant_id": "filtered", "rank": 5})
+        for row in rows:
+            row["mode"] = mode
+        pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), path)
+        journal["stages"]["deliverables"]["outputs"][path.name] = sha256(path)
+    (run / "run.json").write_text(json.dumps(journal))
+    before = contents(run)
+    truth = label(run, alleles=[{"source_row": i, "source_alt": 1} for i in (1, 2)])
+    evaluate_cases(manifest(tmp_path, [truth], mode=mode), tmp_path / "out")
+    case = json.loads((tmp_path / "out/evaluation.json").read_text())["cases"][0]
+    assert (case["gene_rank"], case["allele_rank"], case["allele_gene_rank"]) == (1, 3, 4)
+    assert case["candidate_set_size"] == (5 if mode.startswith("conservative_") else 4)
+    assert case["targets"][0]["candidate"]["phenotype_association_available"] is False
+    assert contents(run) == before
+
+
 def test_low_memory_refuses_evaluation_without_publishing(tmp_path, monkeypatch):
     from types import SimpleNamespace
 

@@ -24,7 +24,7 @@ from rare_disease_agent.workflows.authorized import _outside_git
 from rare_disease_agent.workflows.phase5 import code_checksum
 from rare_disease_agent.workflows.recovery import RunJournal
 
-TOOL_VERSION = "phase5-case-evaluation-v1"
+TOOL_VERSION = "phase5-case-evaluation-v2"
 
 
 class SourceAllele(BaseModel):
@@ -138,6 +138,28 @@ class _Artifacts:
 
 def _all_rank(ranks):
     return max(ranks) if ranks and all(rank is not None for rank in ranks) else None
+
+
+def _validate_ranked_candidates(db, branch):
+    # Validate unrelated candidates too: losing one in a join changes retrieval order.
+    for table in ("mapping", "variants"):
+        if db.execute(
+            f"SELECT r.variant_id FROM ranking r LEFT JOIN {table} t USING(variant_id) "
+            "GROUP BY r.variant_id HAVING count(t.variant_id)<>1 LIMIT 1"
+        ).fetchone():
+            raise ValueError("Ranked candidates require unique mapping and variant rows")
+    if db.execute("""SELECT r.variant_id FROM ranking r
+        JOIN mapping m USING(variant_id) LEFT JOIN alleles a USING(allele_id)
+        GROUP BY r.variant_id HAVING count(a.allele_id)<>1 LIMIT 1""").fetchone():
+        raise ValueError("Ranked candidates require unique allele ledger rows")
+    if db.execute(
+        "SELECT 1 FROM ranking r FULL OUTER JOIN "
+        "(SELECT variant_id, count(*) AS n FROM membership WHERE branch=? AND active "
+        "GROUP BY variant_id) m USING(variant_id) "
+        "WHERE r.variant_id IS NULL OR m.variant_id IS NULL OR m.n<>1 LIMIT 1",
+        [branch],
+    ).fetchone():
+        raise ValueError("Ranking and active branch membership disagree")
 
 
 def _candidate_detail(db, variant_id, gene, branch):
@@ -301,6 +323,8 @@ def _inspect_case(case: LabeledCase, mode: str) -> dict:
                     [journal.run_id],
                 ).fetchone()[0]:
                     raise ValueError("Mixed evidence or membership run identity")
+            branch = "conservative" if mode.startswith("conservative_") else "ensemble"
+            _validate_ranked_candidates(db, branch)
             result["candidate_set_size"] = count
             db.execute("""CREATE TEMP VIEW gene_ranks AS
                 SELECT m.gene_id, row_number() OVER (ORDER BY min(r.rank), m.gene_id) rank
@@ -320,7 +344,6 @@ def _inspect_case(case: LabeledCase, mode: str) -> dict:
                 "WHERE m.gene_id=? ORDER BY r.rank LIMIT 1",
                 [case.expected_gene_id],
             ).fetchone()
-            branch = "conservative" if mode.startswith("conservative_") else "ensemble"
             if gene_candidate:
                 result["gene_candidate"] = _candidate_detail(
                     db, gene_candidate[0], gene_candidate[1] or case.expected_gene_id, branch
