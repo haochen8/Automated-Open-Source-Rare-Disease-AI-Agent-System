@@ -94,6 +94,18 @@ membership and ranking contents, and observations matched across all runs. Basel
 inside the pair loop fell from 1,560 to zero; the 40 single-candidate baseline evaluations remained.
 These small synthetic timings do not predict whole-case capacity or justify increasing the pair cap.
 
+A subsequent single-run comparison of `1547275` and `223b6a0` used 447 synthetic candidates in
+one gene (99,681 pairs), with identical controlled scientific provenance and separately pinned
+source snapshots. Inheritance took 35.70 and 32.05 seconds respectively; supervised elapsed time,
+including all 28 ranking contexts, complete exports, database close and reopened-output checks,
+was 39.17 and 35.62 seconds. Sampled peak process-family RSS was approximately 1,002 and 1,030 MiB.
+Complete ordered pair, evidence, membership, ranking and observation contents matched between
+implementations and a separate profiled current-code run. The 448-candidate check refused
+100,128 potential pairs, preserving zero pair rows and compound evidence and absent ranking
+storage. Existing single-candidate evidence remained because its transaction precedes the guard.
+All existing resource and pair limits remained unchanged. These individual observations do not
+establish a reproducible speedup, whole-case capacity, or annotation/assembly performance.
+
 ### Synthetic analytical capacity trial
 
 A synthetic ladder at source commit `661fc4d` exercised inheritance evidence, all 28 ranking
