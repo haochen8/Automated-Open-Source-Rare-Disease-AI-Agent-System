@@ -100,7 +100,10 @@ class EvidenceStore:
                 ON CONFLICT (run_id, variant_id, gene, method, data_version)
                 DO UPDATE SET score=excluded.score, known=excluded.known,
 payload=excluded.payload
-                WHERE excluded.score >= evidence.score""")
+                WHERE excluded.score >= evidence.score AND (
+                    excluded.score IS DISTINCT FROM evidence.score OR
+                    excluded.known IS DISTINCT FROM evidence.known OR
+                    excluded.payload IS DISTINCT FROM evidence.payload)""")
         finally:
             self.connection.unregister("incoming_evidence")
 

@@ -40,6 +40,33 @@ A failed operation rolls back both pair rows and pair evidence, including batche
 The synthetic dense-gene regression writes and replaces all 780 pairs under a 64 MB DuckDB limit;
 production memory limits are unchanged. This addresses storage overhead, not quadratic pair growth.
 
+### Identical evidence updates
+
+Evidence upserts skip a conflict update only when the incoming score, known flag and complete
+serialized payload are all unchanged. Higher scores still replace lower scores; equal scores with
+different payloads retain the last incoming payload, including changed provenance or warnings.
+The original score-admission condition, version checks, batch reduction, processed-item counts and
+whole-operation transaction remain unchanged. Payload comparison uses stored bytes, not JSON
+semantic equivalence.
+
+A two-process diagnostic at `99ba4aa` used 40 synthetic candidates and 780 pairs. Complete outputs
+matched between the uninstrumented control and the unchanged implementation with write tracing.
+After within-batch reduction, it admitted 240 new rows and 660 conflict updates: 455 updates were
+identical, 161 had equal scores but different payloads, and 44 had higher scores. Six lower-score
+rows were rejected. This established redundant writes; it did not identify the cause of the larger
+memory failure described below. Real DuckDB regression checks confirm that an identical incoming
+item still counts as processed while its conflict update affects zero rows.
+
+An isolated prototype changed only this predicate against `99ba4aa`. Fresh 40-candidate runs
+matched in complete pair, evidence, membership, ranking and observation contents. A single
+447-candidate run (99,681 pairs) also matched the sealed unmodified semantic control, including all
+28 ranking contexts, reopened database contents and all four complete Parquet exports. It took
+35.87 seconds overall, including 32.43 seconds for inheritance, with sampled peak process-family
+RSS of about 989 MiB. Measured inheritance, ranking and validation used one DuckDB thread, its
+decimal 1 GB limit and disabled spilling; the 100,000-pair ceiling remained unchanged. These
+individual observations establish compatibility for the fixed synthetic fixtures, not a speedup,
+memory reduction or increased workload capacity.
+
 ### Bounded candidate reads
 
 Each ordered batch of at most 128 pair IDs fetches only the five genotype-input columns for its
@@ -133,6 +160,18 @@ accuracy. Doubling pair work approximately doubled runtime; memory varied substa
 processes. Retain the production ceiling and obtain target-workload counts and annotation/assembly
 footprints before proposing another capacity increase. A larger ceiling postpones quadratic growth;
 partial pair assessment would require a separate scientific-policy design.
+
+A later experiment at `99ba4aa`, again changing only the isolated pair ceiling to 200,000, did
+not reproduce that capacity. Its 447-candidate control matched the sealed complete outputs, but
+the first 632-candidate run (199,396 potential pairs) failed after 62.86 seconds with a DuckDB
+out-of-memory exception at the pair insert. DuckDB reached its unchanged decimal 1 GB limit;
+sampled process-family RSS remained below its 3 GiB guard and available host memory remained
+above 1.5 GiB. The allocation site alone does not identify which operation retained the memory.
+The remaining scheduled runs were not attempted and the proposed larger production profile was
+not accepted. A read-only scalar check found zero pair rows and compound evidence, with the
+expected single-candidate evidence row count retained; it did not establish complete rollback
+payload equality. The later identical-update optimization passed the checks above but does not
+retroactively resolve this failed trial or authorize a larger cap.
 
 ## Remaining expansion gates
 
