@@ -68,11 +68,13 @@ evaluator's pair finder, endpoint construction and recessive reduction. It omits
 X-linked and summary calculations that this loop does not consume. General `evaluate()` and the
 single-candidate evidence pass retain all models and summaries.
 
-Both homozygous-recessive baselines remain necessary: decoded genotype calls can disagree with the
-SQL row genotype. Even when no compound pair is formed, both autosomal-recessive outputs must be
-retained. Pair confidence, endpoint quality caps, unknown affected status, warning order and the
-strongest-score/last-equal-score reduction are unchanged. No storage, version-validation, eligibility,
-work-budget or resource-limit change accompanies this optimization.
+When a compound pair forms, both decoded probands are heterozygous, so their homozygous-recessive
+fits are zero and cannot improve the compound endpoint fits. The pair path skips those unused
+baseline records. When no pair forms, both homozygous-recessive baselines remain necessary:
+decoded genotype calls can disagree with the SQL row genotype. Both autosomal-recessive outputs
+are retained in either case. Pair confidence, endpoint quality caps, unknown affected status,
+warning order and the strongest-score/last-equal-score reduction are unchanged. No storage,
+version-validation, eligibility, work-budget or resource-limit change accompanies this optimization.
 
 Three fresh-process synthetic comparisons against frozen evaluator and toolbox code from `83cabb3`
 used the same 128-candidate, 8,128-pair workload and controlled provenance. Median inheritance time
@@ -82,6 +84,15 @@ sampled peak process RSS was approximately 205–209 MiB before and 209–216 Mi
 40-candidate comparison passed at 64 MB with exact matching outputs. These are synthetic evaluation
 measurements, not a whole-case forecast. Historical private replays remain tied to their recorded
 source-code identity and must not be relabeled as validation of a newer implementation.
+
+A further synthetic prototype comparison against `1547275` implemented this same fast path,
+isolating the unused zero baselines. Three fresh processes per implementation used 40 candidates
+and 780 pairs, with controlled provenance.
+Median pair-evaluator time fell from 0.112 to 0.081 seconds; complete inheritance-operation time
+fell from 0.384 to 0.362 seconds. Ordered evaluator payloads, complete persisted pair, evidence,
+membership and ranking contents, and observations matched across all runs. Baseline evaluations
+inside the pair loop fell from 1,560 to zero; the 40 single-candidate baseline evaluations remained.
+These small synthetic timings do not predict whole-case capacity or justify increasing the pair cap.
 
 ### Synthetic analytical capacity trial
 

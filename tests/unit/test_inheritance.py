@@ -278,6 +278,36 @@ def test_pair_entry_point_preserves_missing_calls_and_endpoint_quality(case):
     ]
 
 
+@pytest.mark.parametrize("case", ["formed_pair", "homozygous", "missing_calls"])
+def test_pair_skips_homozygous_baselines_only_when_decoded_pair_forms(case, monkeypatch):
+    evaluator = InheritanceEvaluator(
+        synthetic_pedigree(), run_id="synthetic-baseline-calls", software=PAIR_SOFTWARE
+    )
+    first = variant(variant_id="z-first", mother="0/1")
+    second = variant(variant_id="a-second", father="0/1")
+    if case == "homozygous":
+        first.calls[0].genotype = "1/1"
+        first.calls[2].genotype = "0/1"
+    elif case == "missing_calls":
+        first.calls = []
+    full = evaluator.evaluate([first, second])
+    evaluated = []
+    original = evaluator.evaluate_homozygous_recessive
+
+    def record(variant):
+        evaluated.append(variant.variant_id)
+        return original(variant)
+
+    monkeypatch.setattr(evaluator, "evaluate_homozygous_recessive", record)
+    pair = evaluator.evaluate_pair(first, second)
+    assert evaluated == ([] if case == "formed_pair" else ["z-first", "a-second"])
+    assert bool(pair.compound_heterozygous_pairs) == (case == "formed_pair")
+    assert pair.compound_heterozygous_pairs == full.compound_heterozygous_pairs
+    assert pair.evidence == [
+        e for e in full.evidence if e.model in {"compound_heterozygous", "autosomal_recessive"}
+    ]
+
+
 def test_pair_endpoint_payloads_have_independent_expected_explanations_and_provenance():
     evaluator = InheritanceEvaluator(
         synthetic_pedigree(), run_id="synthetic-payload", software=PAIR_SOFTWARE

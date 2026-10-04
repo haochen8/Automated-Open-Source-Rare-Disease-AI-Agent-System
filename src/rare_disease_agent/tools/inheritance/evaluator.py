@@ -367,11 +367,14 @@ class InheritanceEvaluator:
     ) -> PairInheritanceEvaluation:
         """Preserve the general evaluator's ordered compound and recessive outputs."""
         variants = [first, second]
-        # SQL row genotypes and decoded calls can differ. A homozygous baseline is
-        # still needed, including when the decoded calls cannot form a pair.
-        homozygous = [self.evaluate_homozygous_recessive(variant) for variant in variants]
         pairs = self.find_compound_heterozygous_pairs(variants)
         compound = self._compound_endpoint_evidence(variants, pairs)
+        # A formed pair proves both decoded probands are heterozygous: their
+        # homozygous fits are zero and cannot improve either compound endpoint.
+        # Keep both baselines when no pair forms; SQL and decoded calls can differ.
+        homozygous = (
+            [] if pairs else [self.evaluate_homozygous_recessive(variant) for variant in variants]
+        )
         recessive = self._autosomal_recessive_evidence(variants, homozygous + compound)
         return PairInheritanceEvaluation(
             evidence=compound + recessive, compound_heterozygous_pairs=pairs
