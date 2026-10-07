@@ -510,7 +510,7 @@ class VariantToolbox:
                                     "payload": pair.model_dump_json(),
                                 }
                             )
-                            if len(pair_batch) == 128:
+                            if len(pair_batch) == 512:
                                 flush_pairs()
                         yield from (
                             item

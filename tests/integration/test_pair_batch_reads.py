@@ -213,20 +213,24 @@ def test_pair_read_cache_is_bounded_and_does_not_survive_batch(tmp_path, monkeyp
 
 
 def test_read_failure_after_flush_rolls_back_and_retry_matches_reference(tmp_path, monkeypatch):
-    source = source_file(tmp_path, count=24, diverse=False)
+    source = source_file(tmp_path, count=40, diverse=False)
     box = toolbox(source, tmp_path / "failure.duckdb")
+    db = box.membership._connection
+    db.execute("SET memory_limit='64MB'")
+    db.execute("SET threads=1")
+    db.execute("SET temp_directory=''")
     original = box._pair_genotypes
     calls = 0
 
     def fail(pairs):
         nonlocal calls
         calls += 1
-        if calls == 2:
+        if calls == 5:
             assert (
                 box.membership._connection.execute(
                     "SELECT count(*) FROM compound_pairs"
                 ).fetchone()[0]
-                == 128
+                == 512
             )
             raise RuntimeError("synthetic batch read failure")
         yield from original(pairs)
@@ -252,7 +256,60 @@ def test_read_failure_after_flush_rolls_back_and_retry_matches_reference(tmp_pat
         box.membership.close()
     reference = toolbox(source, tmp_path / "reference.duckdb", PerPairReads)
     try:
+        reference.membership._connection.execute("SET memory_limit='64MB'")
+        reference.membership._connection.execute("SET threads=1")
+        reference.membership._connection.execute("SET temp_directory=''")
         reference.evaluate_inheritance(EvaluateInheritanceParameters(branch="all"))
         assert snapshot(reference) == retried
     finally:
         reference.membership.close()
+
+
+def test_read_failure_after_replacement_restores_complete_existing_rows(tmp_path, monkeypatch):
+    source = source_file(tmp_path, count=40, diverse=False)
+    box = toolbox(source, tmp_path / "existing.duckdb")
+    db = box.membership._connection
+    db.execute("SET memory_limit='64MB'")
+    db.execute("SET threads=1")
+    db.execute("SET temp_directory=''")
+    try:
+        box.evaluate_inheritance(EvaluateInheritanceParameters(branch="all"))
+        # Distinct valid JSON and lower scores expose actual writes before the failure.
+        db.execute("UPDATE compound_pairs SET payload=payload || ' '")
+        db.execute(
+            "UPDATE evidence SET payload=payload || ' ', score=0 "
+            "WHERE method='compound_heterozygous'"
+        )
+        before = snapshot(box)
+        assert len(before["pairs"]) == 780
+        original = box._pair_genotypes
+        calls = 0
+
+        def fail(pairs):
+            nonlocal calls
+            calls += 1
+            if calls == 5:
+                assert (
+                    db.execute(
+                        "SELECT count(*) FROM compound_pairs WHERE right(payload,1)<>' '"
+                    ).fetchone()[0]
+                    == 512
+                )
+                assert (
+                    db.execute(
+                        "SELECT count(*) FROM evidence WHERE method='compound_heterozygous' "
+                        "AND right(payload,1)<>' '"
+                    ).fetchone()[0]
+                    > 0
+                )
+                raise RuntimeError("synthetic replacement interruption")
+            yield from original(pairs)
+
+        monkeypatch.setattr(box, "_pair_genotypes", fail)
+        with pytest.raises(RuntimeError, match="replacement interruption"):
+            box.evaluate_inheritance(EvaluateInheritanceParameters(branch="all"))
+        assert calls == 5
+        assert snapshot(box) == before
+        assert box.evidence_store.max_batch_observed == 256
+    finally:
+        box.membership.close()

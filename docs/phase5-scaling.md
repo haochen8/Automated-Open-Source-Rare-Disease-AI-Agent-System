@@ -32,13 +32,35 @@ before any proposed mapping is used for analysis. No additional reference downlo
 
 ## Compound-pair storage
 
-Compound-pair payloads are inserted in batches of at most 128 within the same transaction as
+Compound-pair payloads are inserted in batches of at most 512 within the same transaction as
 their evidence. Per-pair SQL inserts can accumulate DuckDB transaction buffers until memory is
 exhausted even when the final table is small. Batching preserves candidate enumeration, pair
 payloads, replacement semantics, evidence score reduction and the 100,000-pair work budget.
 A failed operation rolls back both pair rows and pair evidence, including batches already flushed.
 The synthetic dense-gene regression writes and replaces all 780 pairs under a 64 MB DuckDB limit;
 production memory limits are unchanged. This addresses storage overhead, not quadratic pair growth.
+
+A storage-only synthetic probe at `ba36432` inserted the same 780 complete pair rows with batch
+sizes 128 and 512. Seven inserts became two; retained DuckDB memory before commit fell from
+4,001,792 to 2,256,896 bytes, entirely in the `IN_MEMORY_TABLE` category. Post-commit memory and
+complete rows matched, including reopened databases and exports. Sampled process RSS was
+essentially unchanged. The probe isolated statement buffering without attributing the earlier
+larger-workload failure to a single cause.
+
+A subsequent analytical comparison changed only the pair-storage batch size to 512. Fresh
+processes at 40 candidates (780 pairs) and 447 candidates (99,681 pairs) matched in complete
+ordered pair, evidence, membership, observation and ranking contents, including all 28 contexts,
+read-only reopened databases and all four saved exports. At 447 candidates, insert statements
+fell from 779 to 195 and measured DuckDB memory immediately before pair commit fell from
+428,857,500 to 194,435,232 bytes. Supervised elapsed time was 34.92 versus 32.56 seconds, and sampled
+peak process-family RSS was about 1,027 versus 807 MiB. These are single-run observations, not
+reproducible speedup or general capacity estimates. Candidate reads remain bounded to 128 pairs
+and 256 decoded candidates; evidence batches and the 100,000-pair ceiling are unchanged.
+Inheritance, ranking and output checks used one DuckDB thread, its decimal 1 GB limit and no
+spilling; unchanged fixture initialization used the constructor's two-thread/default-spill settings.
+The comparison excludes annotation, assembly, phenotype evidence generation and production stage
+publication/resume. Regression checks also restore complete pre-existing rows after failure
+following an actual 512-row replacement flush under a 64 MB limit.
 
 ### Identical evidence updates
 

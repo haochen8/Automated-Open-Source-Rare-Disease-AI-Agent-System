@@ -122,7 +122,7 @@ def test_compound_pair_failure_rolls_back_pair_table_and_pair_evidence(tmp_path,
                 genotype="0/1",
                 genotype_calls_json=json.dumps({"sample": {"genotype": "0/1", "quality": 90}}),
             )
-            for i in range(24)
+            for i in range(40)
         ],
         source,
     )
@@ -137,18 +137,22 @@ def test_compound_pair_failure_rolls_back_pair_table_and_pair_evidence(tmp_path,
         membership_database=tmp_path / "pairs.duckdb",
         inheritance_evaluator=evaluator,
     )
+    db = toolbox.membership._connection
+    db.execute("SET memory_limit='64MB'")
+    db.execute("SET threads=1")
+    db.execute("SET temp_directory=''")
     original = evaluator.evaluate_pair
     calls = 0
 
     def interrupted(first, second):
         nonlocal calls
         calls += 1
-        if calls == 140:
+        if calls == 526:
             assert (
                 toolbox.membership._connection.execute(
                     "SELECT count(*) FROM compound_pairs"
                 ).fetchone()[0]
-                == 128
+                == 512
             )
             raise RuntimeError("synthetic pair interruption")
         return original(first, second)
@@ -167,24 +171,26 @@ def test_compound_pair_failure_rolls_back_pair_table_and_pair_evidence(tmp_path,
         )
         monkeypatch.setattr(evaluator, "evaluate_pair", original)
         toolbox.evaluate_inheritance(EvaluateInheritanceParameters(branch="all"))
-        assert db.execute("SELECT count(*) FROM compound_pairs").fetchone()[0] == 276
+        assert db.execute("SELECT count(*) FROM compound_pairs").fetchone()[0] == 780
         assert (
             db.execute(
                 "SELECT count(*) FROM evidence WHERE method='compound_heterozygous'"
             ).fetchone()[0]
-            == 24
+            == 40
         )
     finally:
         toolbox.membership.close()
 
 
-def test_dense_gene_pair_storage_stays_bounded_and_replaces_existing_pairs(tmp_path):
+def test_dense_gene_pair_storage_stays_bounded_and_replaces_existing_pairs(tmp_path, monkeypatch):
     import json
+    from types import SimpleNamespace
 
     from rare_disease_agent.agents.schemas import EvaluateInheritanceParameters
     from rare_disease_agent.storage.parquet import write_variants_parquet
     from rare_disease_agent.tools.inheritance.evaluator import InheritanceEvaluator
     from rare_disease_agent.tools.inheritance.schemas import Individual, Pedigree
+    from rare_disease_agent.tools.variants import agent_tools
     from rare_disease_agent.tools.variants.agent_tools import VariantToolbox
     from rare_disease_agent.tools.variants.vcf import VariantRecord
 
@@ -216,14 +222,32 @@ def test_dense_gene_pair_storage_stays_bounded_and_replaces_existing_pairs(tmp_p
         membership_database=tmp_path / "dense.duckdb",
         inheritance_evaluator=evaluator,
     )
+    pair_batches = []
+    from_pylist = agent_tools.pa.Table.from_pylist
+
+    def record_pair_batch(rows):
+        pair_batches.append(len(rows))
+        return from_pylist(rows)
+
+    monkeypatch.setattr(
+        agent_tools, "pa", SimpleNamespace(Table=SimpleNamespace(from_pylist=record_pair_batch))
+    )
     try:
         db = toolbox.membership._connection
         # A stricter synthetic stress limit, not a change to production resource safeguards.
         db.execute("SET memory_limit='64MB'")
         db.execute("SET threads=1")
         db.execute("SET temp_directory=''")
-        for _ in range(2):
+        queries = [
+            "SELECT * FROM compound_pairs ORDER BY run_id,variant_a,variant_b",
+            "SELECT * FROM evidence ORDER BY run_id,variant_id,gene,method,data_version",
+        ]
+        expected = None
+        for attempt in range(2):
+            pair_batches.clear()
             toolbox.evaluate_inheritance(EvaluateInheritanceParameters(branch="all"))
+            assert pair_batches == [512, 268]
+            assert toolbox.evidence_store.max_batch_observed == 256
             assert db.execute("SELECT count(*) FROM compound_pairs").fetchone()[0] == 780
             assert (
                 db.execute(
@@ -237,6 +261,21 @@ def test_dense_gene_pair_storage_stays_bounded_and_replaces_existing_pairs(tmp_p
                 ).fetchone()[0]
                 <= 0.5
             )
+            complete = [db.execute(query).fetchall() for query in queries]
+            if attempt == 0:
+                expected = complete
+                # Valid JSON with distinct bytes proves replacement is not an identical no-op.
+                db.execute("UPDATE compound_pairs SET payload=payload || ' '")
+                db.execute(
+                    "UPDATE evidence SET payload=payload || ' ', score=0 "
+                    "WHERE method='compound_heterozygous'"
+                )
+                assert all(
+                    db.execute(query).fetchall() != rows
+                    for query, rows in zip(queries, expected, strict=True)
+                )
+            else:
+                assert complete == expected
         payload = json.loads(
             db.execute(
                 "SELECT payload FROM compound_pairs "
