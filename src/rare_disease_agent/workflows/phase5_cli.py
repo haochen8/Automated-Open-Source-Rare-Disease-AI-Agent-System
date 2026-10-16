@@ -29,6 +29,33 @@ from rare_disease_agent.workflows.phase5_diagnostics import (
 app = typer.Typer(help="Private bounded Track 1 rehearsal; no downloads or live models.")
 
 
+@app.command("corpus-run")
+def corpus_run(config: Path):
+    """Validate sealed annotation references and run one bounded global analysis."""
+    from rare_disease_agent.workflows.assembly import read_json
+    from rare_disease_agent.workflows.corpus import (
+        CorpusInput,
+        CorpusPairBudgetExceeded,
+        run_corpus,
+    )
+    from rare_disease_agent.workflows.partitioning import _private
+
+    try:
+        _private(config)
+        run_corpus(CorpusInput.model_validate(read_json(config)))
+    except CorpusPairBudgetExceeded:
+        typer.echo(
+            "Private corpus analysis blocked by the global pair-work limit. "
+            "Validated corpus and workload report are preserved.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    except Exception as exc:
+        typer.echo("Private corpus run failed: " + type(exc).__name__, err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo("Private corpus run completed. No case values are displayed.")
+
+
 @app.command("coverage-batch")
 def coverage_batch(config: Path):
     """Run an explicitly authorized bounded batch through isolated fixed stages."""

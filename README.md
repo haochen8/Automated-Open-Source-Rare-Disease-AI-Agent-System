@@ -188,6 +188,11 @@ whole-genome coverage or a submission-ready case analysis.
 See [execution and limits](docs/phase5-execution.md) and the proposed
 [Phase 6 evaluation plan](docs/phase6-recommendation.md).
 
+The [corpus workflow](docs/phase5-scaling.md#referenced-annotation-corpus) accepts sealed local
+annotation bundles, validates them with the current implementation, and analyzes their ordered
+union. It avoids copying earlier annotation bundles into each new batch. The existing global
+pair and resource limits still apply; annotation execution remains a separate operation.
+
 ## Configuration
 
 - `configs/default.yaml`: validated runtime defaults

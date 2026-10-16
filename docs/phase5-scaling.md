@@ -422,3 +422,65 @@ from starting, including on resume. Annotation, validation and assembly remain a
 filters candidates or changes the cap to make the run pass. Execution also retains its own
 branch-specific budget check. The count measures enumeration work, not retained evidence, causal
 accuracy, runtime or memory guarantees; the existing live resource supervisor remains mandatory.
+
+## Referenced annotation corpus
+
+`phase5 corpus-run /private/path/corpus.json` provides a separate path from sealed local
+annotation bundles through current-code validation, global assembly, pair preflight and a complete
+Phase 5 analysis/report. It never executes normalization or annotation. The existing
+`coverage-batch` interface and its eight-shard request cap remain unchanged.
+
+The private configuration follows `workflows.corpus.CorpusInput`: `plan`, `partitions`,
+`reference_manifest`, `reference_manifest_sha256`, `normalization`, `annotation`, `ranking`,
+`output` and `confirmed_local_research_use`. Paths must be absolute and outside Git. The two
+pinned tool specifications and the `Phase5Input` ranking specification have the same structure as
+coverage-batch inputs. Tool specifications validate annotation provenance; they do not authorize
+or initiate tool execution. Set the ranking input to `<corpus-output>/assembly` and its output to
+`<corpus-output>/ranking/run`.
+
+The checksummed reference manifest is JSONL, with one object per annotation bundle:
+
+```json
+{"shard": 1, "directory": "/private/path/completed/annotation_000001", "integrity_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+```
+
+Replace the placeholder digest with that bundle's `integrity_manifest.json` SHA-256. References
+may arrive in any order; scientific processing follows original source intervals. A reference
+pins every artifact in the bundle, the tagged source subset, normalization/annotation receipt
+chain, executable identity and tool/resource configuration. Keep referenced bundles immutable
+and available for the lifetime of the corpus. Reference adoption does not authorize their removal.
+No annotation files are copied into the new corpus.
+
+Validation and ingestion run again. Current code-bound source plans, materialization and validation
+identities are required; an implementation change requires fresh preparation. An older annotation
+bundle can be reused only when its exact tagged source bytes and provenance pass the existing reuse
+checks. Historical validation proofs and ranking results are never relabeled as current results.
+
+The workflow commits an index, validation, assembly, exact pair preflight and ranking in order.
+Assembly streams all four scientific tables and its proof records, retains source/alternate and
+transcript provenance, and rejects overlapping intervals or duplicate global allele/candidate
+identities. Coverage accounts separately for selected, unprocessed and deferred source records.
+The global analysis includes cross-shard pairs and every conservative/rescue candidate; it does not
+merge local rankings or select candidates to reduce work.
+
+If exact potential pair work exceeds 200,000, the validated corpus and private workload report stay
+committed, while analysis is blocked. The report counts enumeration work, not retained pairs or
+scientific support. Resume cannot waive this check. A different total-work policy would need its
+own scope, validation and versioned contract.
+
+Corpus admission allows at most 100,000 references, 64 MiB of JSONL and 64 KiB per line. These are
+input bounds, not demonstrated execution capacity. Root metadata and journal records remain bounded
+to 4 MiB; a stage whose journal cannot fit is refused before publication. The combined 2 GiB budget
+includes the reference manifest, referenced annotation bundles and newly generated indexes,
+validation tables, assembly, database, exports, attempts and staging. Original VCFs, public caches
+and partition preparation directories are separate inputs outside this accounting. A reference
+outside the output directory does not provide free capacity. The supervisor enforces a combined
+3 GiB RSS limit for the coordinator and worker process family, one hour per stage, 1 GiB available
+memory at entry, 256 MiB minimum live available memory and 25 GiB free-disk reserve. Coordinator
+identity and journal operations have their own one-hour guard. Assembly and pair counting retain
+their 256 MB, single-threaded, no-spill DuckDB settings.
+
+Committed stages are immutable and checksummed; interrupted uncommitted work is recomputed.
+Changed source, references, resources, implementation or committed artifacts require a fresh run.
+The nine-shard synthetic oracle tests scientific equivalence with an unpartitioned control. It is
+not a whole-case capacity forecast, independent accuracy evaluation or submission-readiness claim.

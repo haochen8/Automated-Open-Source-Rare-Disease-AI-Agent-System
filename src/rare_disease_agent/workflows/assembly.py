@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import duckdb
@@ -21,6 +22,7 @@ from rare_disease_agent.workflows.phase5 import code_checksum
 
 TABLES = ("alleles", "consequences", "candidate_map", "variants")
 ASSEMBLY_VERSION = "verified-shard-assembly-v1"
+CORPUS_ASSEMBLY_VERSION = "verified-corpus-assembly-v1"
 
 
 def read_json(path: Path) -> dict:
@@ -73,21 +75,26 @@ def plan_identity(plan: Path) -> dict:
     return manifest
 
 
-def verify_partition(plan: Path, shard: Path) -> tuple[dict, dict]:
+def verify_partition(
+    plan: Path, shard: Path, *, prepared: tuple[dict, dict, str] | None = None
+) -> tuple[dict, dict]:
     """Bind actual tagged rows to the source plan, not merely to a supplied receipt."""
     _private(plan, shard)
-    manifest = plan_identity(plan)
+    # Corpus workers bind this indexed segment to the unchanged complete source plan.
+    # The existing public path still independently discovers and verifies its segment.
+    manifest = plan_identity(plan) if prepared is None else prepared[0]
     receipt = read_json(shard / "receipt.json")
-    match = None
-    with (plan / "segments.jsonl").open() as stream:
-        while line := stream.readline(MAX_HEADER + 1):
-            if len(line) > MAX_HEADER:
-                raise ValueError("Coverage segment exceeds metadata budget")
-            segment = json.loads(line)
-            if segment["shard"] == receipt["shard"]:
-                if match is not None:
-                    raise ValueError("Repeated coverage segment")
-                match = segment
+    match = None if prepared is None else prepared[1]
+    if prepared is None:
+        with (plan / "segments.jsonl").open() as stream:
+            while line := stream.readline(MAX_HEADER + 1):
+                if len(line) > MAX_HEADER:
+                    raise ValueError("Coverage segment exceeds metadata budget")
+                segment = json.loads(line)
+                if segment["shard"] == receipt["shard"]:
+                    if match is not None:
+                        raise ValueError("Repeated coverage segment")
+                    match = segment
     if (
         match is None
         or match["shard"] is None
@@ -113,16 +120,24 @@ def verify_partition(plan: Path, shard: Path) -> tuple[dict, dict]:
     if (
         count != match["source_records"]
         or digest.hexdigest() != match["records_sha256"]
-        or "\n".join(header) + "\n" != (plan / "header.txt").read_text()
+        or "\n".join(header) + "\n"
+        != ((plan / "header.txt").read_text() if prepared is None else prepared[2])
     ):
         raise ValueError("Partition source content mismatch")
     return manifest, match
 
 
-def validate_shard(plan: Path, shard: Path, annotation: Path, output: Path):
+def validate_shard(
+    plan: Path,
+    shard: Path,
+    annotation: Path,
+    output: Path,
+    *,
+    prepared_partition: tuple[dict, dict, str] | None = None,
+):
     """Write tables and source-bound proof; caller publishes the stage atomically."""
     _private(output)
-    manifest, segment = verify_partition(plan, shard)
+    manifest, segment = verify_partition(plan, shard, prepared=prepared_partition)
     before = verified(annotation)
     required = {
         "subset.vcf",
@@ -189,7 +204,9 @@ def validate_shard(plan: Path, shard: Path, annotation: Path, output: Path):
     ):
         raise ValueError("Reconciliation does not match source coverage")
     ingest_vep(annotation / "annotated.vcf", annotation / "normalized.vcf", output / "tables")
-    if verified(annotation) != before or verify_partition(plan, shard) != (manifest, segment):
+    if verified(annotation) != before or verify_partition(
+        plan, shard, prepared=prepared_partition
+    ) != (manifest, segment):
         raise ValueError("Inputs changed during validation")
     atomic_json(
         output / "proof.json",
@@ -208,6 +225,56 @@ def validate_shard(plan: Path, shard: Path, annotation: Path, output: Path):
         },
     )
     seal(output)
+
+
+def write_assembly_tables(validation_paths: Callable[[], Iterator[Path]], tables: Path) -> dict:
+    """Shared bounded table stream; callers verify provenance before and after consumption."""
+    tables.mkdir()
+    metrics = {name: 0 for name in TABLES}
+    metrics.update(missing_population_frequency=0, deferred_alleles=0)
+    for name in TABLES:
+        first = next(validation_paths())
+        schema = pq.read_schema(first / "tables" / (name + ".parquet"))
+        with pq.ParquetWriter(tables / (name + ".parquet"), schema, compression="zstd") as writer:
+            for path in validation_paths():
+                source = pq.ParquetFile(path / "tables" / (name + ".parquet"))
+                if source.schema_arrow != schema:
+                    raise ValueError("Mixed ingestion table schema")
+                for batch in source.iter_batches(batch_size=256):
+                    writer.write_batch(batch)
+                    metrics[name] += batch.num_rows
+    for path in validation_paths():
+        counts = read_json(path / "tables" / "manifest.json")
+        for name in ("missing_population_frequency", "deferred_alleles"):
+            metrics[name] += counts[name]
+    with duckdb.connect() as db:
+        db.execute("SET memory_limit='256MB'")
+        db.execute("SET threads=1")
+        db.execute("SET temp_directory=''")  # Fail closed instead of spilling private rows.
+        db.from_parquet(str(tables / "alleles.parquet")).create_view("alleles")
+        for columns in ("allele_id", "chromosome, position, reference, alternate"):
+            if db.execute(
+                f"SELECT 1 FROM alleles GROUP BY {columns} HAVING count(*)>1 LIMIT 1"
+            ).fetchone():
+                raise ValueError("Duplicate source or normalized allele requires explicit mapping")
+        db.from_parquet(str(tables / "variants.parquet")).create_view("variants")
+        if db.execute(
+            "SELECT 1 FROM variants GROUP BY variant_id HAVING count(*)>1 LIMIT 1"
+        ).fetchone():
+            raise ValueError("Duplicate global candidate")
+    atomic_json(
+        tables / "manifest.json",
+        metrics
+        | {
+            "candidate_unit": "source allele and gene",
+            "representative_policy": (
+                "highest configured consequence score per gene; retain all CSQ"
+            ),
+            "sample_alias": "sample_1",
+            "outputs": inventory(tables),
+        },
+    )
+    return metrics
 
 
 def assemble_verified(plan: Path, validations: list[Path], output: Path):
@@ -243,53 +310,9 @@ def assemble_verified(plan: Path, validations: list[Path], output: Path):
         ):
             raise ValueError("Mixed context, repeated shard, or overlapping source intervals")
         previous = segment["last_source_row"]
-    tables = output / "tables"
-    tables.mkdir()
-    metrics = {name: 0 for name in TABLES}
-    metrics.update(missing_population_frequency=0, deferred_alleles=0)
-    for name in TABLES:
-        schema = pq.read_schema(validations[0] / "tables" / (name + ".parquet"))
-        with pq.ParquetWriter(tables / (name + ".parquet"), schema, compression="zstd") as writer:
-            for path in validations:
-                source = pq.ParquetFile(path / "tables" / (name + ".parquet"))
-                if source.schema_arrow != schema:
-                    raise ValueError("Mixed ingestion table schema")
-                for batch in source.iter_batches(batch_size=256):
-                    writer.write_batch(batch)
-                    metrics[name] += batch.num_rows
-    for path in validations:
-        counts = read_json(path / "tables" / "manifest.json")
-        for name in ("missing_population_frequency", "deferred_alleles"):
-            metrics[name] += counts[name]
-    with duckdb.connect() as db:
-        db.execute("SET memory_limit='256MB'")
-        db.execute("SET threads=1")
-        db.execute("SET temp_directory=''")  # Fail closed instead of spilling private rows.
-        db.from_parquet(str(tables / "alleles.parquet")).create_view("alleles")
-        for columns in ("allele_id", "chromosome, position, reference, alternate"):
-            if db.execute(
-                f"SELECT 1 FROM alleles GROUP BY {columns} HAVING count(*)>1 LIMIT 1"
-            ).fetchone():
-                raise ValueError("Duplicate source or normalized allele requires explicit mapping")
-        db.from_parquet(str(tables / "variants.parquet")).create_view("variants")
-        if db.execute(
-            "SELECT 1 FROM variants GROUP BY variant_id HAVING count(*)>1 LIMIT 1"
-        ).fetchone():
-            raise ValueError("Duplicate global candidate")
+    metrics = write_assembly_tables(lambda: iter(validations), output / "tables")
     if [verified(path) for path in validations] != before or plan_identity(plan) != manifest:
         raise ValueError("Assembly inputs changed")
-    atomic_json(
-        tables / "manifest.json",
-        metrics
-        | {
-            "candidate_unit": "source allele and gene",
-            "representative_policy": (
-                "highest configured consequence score per gene; retain all CSQ"
-            ),
-            "sample_alias": "sample_1",
-            "outputs": inventory(tables),
-        },
-    )
     included_records = sum(p["segment"]["source_records"] for p in proofs)
     included_alleles = sum(p["segment"]["alternate_alleles"] for p in proofs)
     if metrics["alleles"] != included_alleles:
@@ -332,9 +355,12 @@ def verify_assembly(directory: Path) -> dict:
     required = {"run_manifest.json", "reconciliation.json", "tables/manifest.json"} | {
         "tables/" + table + ".parquet" for table in TABLES
     }
+    if manifest.get("format") == CORPUS_ASSEMBLY_VERSION:
+        required.add("shard_proofs.jsonl")
+        verify_corpus_proofs(directory, manifest, contents)
     if (
         set(contents) != required
-        or manifest.get("format") != ASSEMBLY_VERSION
+        or manifest.get("format") not in {ASSEMBLY_VERSION, CORPUS_ASSEMBLY_VERSION}
         or manifest["status"] != "completed"
         or manifest["code_sha256"] != code_checksum()
         or manifest["coverage"]["whole_genome_analysis_complete"] is not False
@@ -347,3 +373,87 @@ def verify_assembly(directory: Path) -> dict:
     ):
         raise ValueError("Assembly table linkage mismatch")
     return manifest
+
+
+def verify_corpus_proofs(directory: Path, manifest: dict, contents: dict):
+    """Verify bounded streamed provenance, coverage, ordering and table receipt linkage."""
+    index = manifest["proof_index"]
+    path = directory / "shard_proofs.jsonl"
+    if (
+        set(index) != {"path", "sha256", "shards"}
+        or index["path"] != path.name
+        or index["sha256"] != contents[path.name]
+        or type(index["shards"]) is not int
+        or not 1 <= index["shards"] <= 100_000
+        or path.stat().st_size > 64 * 1024**2
+    ):
+        raise ValueError("Invalid corpus proof index")
+    previous = records = alleles = count = consumed = 0
+    common_sample = None
+    expected = {"proof.json", "tables/manifest.json"} | {
+        "tables/" + name + ".parquet" for name in TABLES
+    }
+    with path.open("rb") as stream:
+        while line := stream.readline(64 * 1024 + 1):
+            count += 1
+            consumed += len(line)
+            if len(line) > 64 * 1024 or count > 100_000 or consumed > 64 * 1024**2:
+                raise ValueError("Corpus proof stream exceeds metadata budget")
+            item = json.loads(line)
+            if set(item) != {"proof", "validation_integrity"}:
+                raise ValueError("Invalid corpus proof record")
+            proof = item["proof"]
+            segment = proof["segment"]
+            receipt = proof["reconciliation"]
+            if common_sample is None:
+                common_sample = proof["sample_identity_sha256"]
+            if (
+                proof["version"] != ASSEMBLY_VERSION
+                or proof["code_sha256"] != manifest["code_sha256"]
+                or proof["source_sha256"] != manifest["source_sha256"]
+                or proof["plan_manifest_sha256"] != manifest["plan_manifest_sha256"]
+                or proof["context"] != manifest["context"]
+                or proof["sample_identity_sha256"] != common_sample
+                or set(item["validation_integrity"]) != expected
+                or hashlib.sha256(
+                    (json.dumps(proof, indent=2, sort_keys=True) + "\n").encode()
+                ).hexdigest()
+                != item["validation_integrity"]["proof.json"]
+                or type(segment["first_source_row"]) is not int
+                or segment["first_source_row"] <= previous
+                or type(segment["source_records"]) is not int
+                or not 1 <= segment["source_records"] <= 500
+                or segment["last_source_row"] - segment["first_source_row"] + 1
+                != segment["source_records"]
+                or type(segment["alternate_alleles"]) is not int
+                or segment["alternate_alleles"] < 0
+                or receipt["source_records"] != segment["source_records"]
+                or receipt["normalized_alleles"] != segment["alternate_alleles"]
+                or segment["disposition"] != "eligible_autosomal_sequence"
+            ):
+                raise ValueError("Corpus proof identity, interval or reconciliation mismatch")
+            previous = segment["last_source_row"]
+            records += segment["source_records"]
+            alleles += segment["alternate_alleles"]
+    coverage = manifest["coverage"]
+    plan = manifest["source_plan"]
+    reconciliation = read_json(directory / "reconciliation.json")
+    if (
+        count != index["shards"]
+        or records != coverage["included_source_records"]
+        or alleles != coverage["included_alternate_alleles"]
+        or coverage["unprocessed_source_records"] != plan["source_records"] - records
+        or coverage["unprocessed_alternate_alleles"] != plan["alternate_alleles"] - alleles
+        or coverage["unprocessed_source_records"] < 0
+        or coverage["unprocessed_alternate_alleles"] < 0
+        or coverage["source_dispositions"] != plan["counts"]
+        or sum(v["source_records"] for v in plan["counts"].values()) != plan["source_records"]
+        or sum(v["alternate_alleles"] for v in plan["counts"].values()) != plan["alternate_alleles"]
+        or reconciliation
+        != {
+            "source_records": records,
+            "normalized_alleles": alleles,
+            "genotype_reconciliation": True,
+        }
+    ):
+        raise ValueError("Corpus proof coverage ledger mismatch")

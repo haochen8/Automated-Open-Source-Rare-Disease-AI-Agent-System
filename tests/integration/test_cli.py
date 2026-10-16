@@ -8,6 +8,22 @@ from rare_disease_agent.models.hardware import HardwareInfo
 runner = CliRunner()
 
 
+def test_corpus_cli_refuses_invalid_or_oversized_private_configuration(tmp_path, monkeypatch):
+    def unexpected_run(spec):
+        raise AssertionError("Invalid configuration reached execution")
+
+    monkeypatch.setattr("rare_disease_agent.workflows.corpus.run_corpus", unexpected_run)
+    config = tmp_path / "corpus.json"
+    marker = "SYNTHETIC_PRIVATE_MARKER"
+    for content in (json.dumps({"run_id": marker}), " " * (4 * 1024**2 + 1)):
+        config.write_text(content)
+        result = runner.invoke(app, ["phase5", "corpus-run", str(config)])
+        assert result.exit_code == 1
+        assert "Private corpus run failed:" in result.output
+        assert marker not in result.output
+        assert "AssertionError" not in result.output
+
+
 def test_models_recommend_json_does_not_download(monkeypatch) -> None:
     hardware = HardwareInfo(
         operating_system="macOS",

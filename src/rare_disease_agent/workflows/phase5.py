@@ -130,7 +130,7 @@ def _run(spec: Phase5Input, *, interrupt_after: str | None = None) -> dict:
         raise ValueError("Annotation rehearsal does not match original input")
     if prior["source_sha256"] != fingerprints["challenge_track1_vcf"]["sha256"]:
         raise Phase5IdentityMismatch(["annotation_source"])
-    assembly = prior.get("format") == "verified-shard-assembly-v1"
+    assembly = prior.get("format") in {"verified-shard-assembly-v1", "verified-corpus-assembly-v1"}
     if assembly:
         from rare_disease_agent.workflows.assembly import verify_assembly
 
@@ -204,6 +204,12 @@ def _run(spec: Phase5Input, *, interrupt_after: str | None = None) -> dict:
                 for name in ("normalization.receipt.json", "annotation.receipt.json")
             },
         )
+        if prior.get("format") == "verified-corpus-assembly-v1":
+            # Keep the bounded streamed provenance beside its copied root receipt.
+            proof_path = path / "shard_proofs.jsonl"
+            shutil.copyfile(rehearsal / "shard_proofs.jsonl", proof_path)
+            if sha256(proof_path) != prior["proof_index"]["sha256"]:
+                raise ValueError("Corpus provenance changed during copy")
         atomic_json(path / "run_manifest.json", configuration)
 
     prepare_path = runner.stage("prepare", prepare)
