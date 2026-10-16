@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import duckdb
 
-PAIR_WORK_BUDGET = 100_000
+PAIR_WORK_BUDGET = 200_000
 
 
 def count_pair_work(

@@ -116,7 +116,8 @@ See [resource lifecycle](resources.md), [operational procedures](operations.md),
 - Full official public releases were not downloaded; production-shaped parsing is verified with
   tiny official-schema synthetic fixtures. Source licenses are recorded, not interpreted as grants.
 - Ontology memory depends on resource size; per-patient evidence is batched and externalized.
-  Compound pairing is quadratic within a gene and fails above a 100,000-pair work budget.
+  The Phase 4 implementation failed above a 100,000-pair work budget; see the
+  [current operational limits](operations.md) for the shared ceiling. Pair growth remains quadratic.
 - Sex-chromosome/PAR context and normalization/reference declarations must be supplied correctly.
   Symbolic alleles, unsupported contigs and ambiguous ploidy fail closed. This is not a full VCF
   specification implementation, transcript annotator or reference-sequence validator.

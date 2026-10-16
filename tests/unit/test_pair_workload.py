@@ -51,8 +51,11 @@ def test_count_matches_explicit_enumeration(membership):
         assert count_pair_work(db, membership=membership) == expected == (1 if membership else 3)
 
 
-@pytest.mark.parametrize("n,expected", [(0, 0), (1, 0), (447, 99681), (448, 100128)])
+@pytest.mark.parametrize(
+    "n,expected", [(0, 0), (1, 0), (447, 99681), (448, 100128), (632, 199396), (633, 200028)]
+)
 def test_budget_boundary_without_pair_materialization(n, expected):
+    assert PAIR_WORK_BUDGET == 200_000
     with duckdb.connect() as db:
         db.execute(
             "CREATE TABLE variants AS SELECT i variant_id, 'GENE' gene, '1' chromosome, "
@@ -60,4 +63,4 @@ def test_budget_boundary_without_pair_materialization(n, expected):
             [n],
         )
         assert count_pair_work(db) == expected
-        assert (expected <= PAIR_WORK_BUDGET) == (n < 448)
+        assert (expected <= PAIR_WORK_BUDGET) == (n < 633)

@@ -2,6 +2,7 @@
 
 import json
 
+import duckdb
 import pytest
 
 from rare_disease_agent.agents.schemas import EvaluateInheritanceParameters
@@ -313,3 +314,55 @@ def test_read_failure_after_replacement_restores_complete_existing_rows(tmp_path
         assert box.evidence_store.max_batch_observed == 256
     finally:
         box.membership.close()
+
+
+def test_633_candidates_refused_before_pair_evaluation_preserving_single_evidence(
+    tmp_path, monkeypatch
+):
+    source = source_file(tmp_path, count=633, diverse=False)
+    database = tmp_path / "over-budget.duckdb"
+    box = toolbox(source, database)
+    db = box.membership._connection
+    db.execute("SET memory_limit='64MB'")
+    db.execute("SET threads=1")
+    db.execute("SET temp_directory=''")
+    monkeypatch.setattr(
+        box.inheritance_evaluator,
+        "evaluate_pair",
+        lambda *_: pytest.fail("Pair evaluation must not start above the work budget"),
+    )
+    query = "SELECT * FROM evidence ORDER BY run_id,variant_id,gene,method,data_version"
+    try:
+        with pytest.raises(VariantToolError, match="work budget exceeded"):
+            box.evaluate_inheritance(EvaluateInheritanceParameters(branch="all"))
+        assert db.execute("SELECT count(*) FROM compound_pairs").fetchone()[0] == 0
+        assert db.execute(
+            "SELECT method,count(*) FROM evidence GROUP BY method ORDER BY method"
+        ).fetchall() == [
+            (method, 633)
+            for method in [
+                "autosomal_dominant",
+                "autosomal_recessive",
+                "de_novo",
+                "homozygous_recessive",
+                "x_linked",
+            ]
+        ]
+        retained = db.execute(query).fetchall()
+        assert len(retained) == 5 * 633
+        assert box.membership.count("all") == 633
+    finally:
+        box.membership.close()
+    with duckdb.connect(
+        str(database),
+        read_only=True,
+        config={"memory_limit": "64MB", "threads": 1, "temp_directory": ""},
+    ) as reopened:
+        assert reopened.execute(query).fetchall() == retained
+        assert reopened.execute("SELECT count(*) FROM compound_pairs").fetchone()[0] == 0
+        assert (
+            reopened.execute(
+                "SELECT count(*) FROM evidence WHERE method='compound_heterozygous'"
+            ).fetchone()[0]
+            == 0
+        )

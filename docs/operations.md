@@ -29,7 +29,7 @@ rank links the report back to the separately inspectable local database. Redacti
 to publish a patient-derived report.
 
 DuckDB membership/ranking uses a 1 GiB memory limit and two threads. Python evidence and rank batches
-are normally 256 records. Compound pairing remains quadratic within a gene; a 100,000-pair work
+are normally 256 records. Compound pairing remains quadratic within a gene; a 200,000-pair work
 budget fails closed and requires candidate refinement before re-inspection. This bounds work; it
 is not a guarantee that every genome can be processed without an explicit filtering strategy.
 

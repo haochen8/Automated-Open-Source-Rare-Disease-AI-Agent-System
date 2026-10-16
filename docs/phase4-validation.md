@@ -48,7 +48,7 @@ The larger run starts with allocator/library memory retained from the first. Pea
 whole process; SQL storage/indexing can grow within the configured 1 GiB DuckDB limit. Python
 batches and planner observations remain bounded as row count grows. Generated calls are reference
 backgrounds across 100 synthetic genes; dense compound-pair behavior is bounded by a separate
-100,000-pair refusal policy, not represented as stress throughput in this table.
+100,000-pair refusal policy at that release, not represented as stress throughput in this table.
 
 ## Reproduction
 

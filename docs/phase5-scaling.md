@@ -35,7 +35,7 @@ before any proposed mapping is used for analysis. No additional reference downlo
 Compound-pair payloads are inserted in batches of at most 512 within the same transaction as
 their evidence. Per-pair SQL inserts can accumulate DuckDB transaction buffers until memory is
 exhausted even when the final table is small. Batching preserves candidate enumeration, pair
-payloads, replacement semantics, evidence score reduction and the 100,000-pair work budget.
+payloads, replacement semantics, evidence score reduction and the shared 200,000-pair work budget.
 A failed operation rolls back both pair rows and pair evidence, including batches already flushed.
 The synthetic dense-gene regression writes and replaces all 780 pairs under a 64 MB DuckDB limit;
 production memory limits are unchanged. This addresses storage overhead, not quadratic pair growth.
@@ -55,7 +55,8 @@ fell from 779 to 195 and measured DuckDB memory immediately before pair commit f
 428,857,500 to 194,435,232 bytes. Supervised elapsed time was 34.92 versus 32.56 seconds, and sampled
 peak process-family RSS was about 1,027 versus 807 MiB. These are single-run observations, not
 reproducible speedup or general capacity estimates. Candidate reads remain bounded to 128 pairs
-and 256 decoded candidates; evidence batches and the 100,000-pair ceiling are unchanged.
+and 256 decoded candidates; evidence batches and the 100,000-pair ceiling remained unchanged in
+that comparison.
 Inheritance, ranking and output checks used one DuckDB thread, its decimal 1 GB limit and no
 spilling; unchanged fixture initialization used the constructor's two-thread/default-spill settings.
 The comparison excludes annotation, assembly, phenotype evidence generation and production stage
@@ -95,7 +96,7 @@ Each ordered batch of at most 128 pair IDs fetches only the five genotype-input 
 distinct candidates in one parameterized query. At most 256 candidates are decoded once per batch;
 the cache is discarded between batches. The original pair order and endpoint order are preserved,
 including equal-score evidence replacement. SQL eligibility, evaluator behavior, complete payloads,
-transaction boundaries, ranking and the global 100,000-pair budget remain unchanged. Missing
+transaction boundaries, ranking and the shared pair-work budget are preserved. Missing
 candidates fail closed and roll back pair evidence and pair rows.
 
 Three fresh-process synthetic comparisons against `e7c12d9`, with 128 heterozygous candidates in
@@ -164,7 +165,7 @@ pair, membership, ranking and export hashes. Median supervised elapsed time was 
 A 448-candidate workload (100,128 potential pairs) was refused without writing pair rows.
 
 A separately approved experiment archived that same source and changed only its pair ceiling
-to 200,000. Production remains at 100,000. Three fresh processes with 632 candidates (199,396
+to 200,000. Production then remained at 100,000. Three fresh processes with 632 candidates (199,396
 pairs) took 84.77–86.39 seconds, median 85.27 seconds, with sampled peak process-family RSS of
 1.13–1.77 GiB. Complete hashes matched across repeats and were independently recomputed from
 reopened read-only databases and saved pair exports. A two-gene workload (199,362 pairs) and
@@ -179,8 +180,9 @@ The fixtures use mixed phase, parental-origin and quality states, a mock plan, b
 phenotype resources and complete exports. These measurements exclude annotation, validation,
 assembly, production stage publication and resume. They do not establish whole-case capacity or
 accuracy. Doubling pair work approximately doubled runtime; memory varied substantially between
-processes. Retain the production ceiling and obtain target-workload counts and annotation/assembly
-footprints before proposing another capacity increase. A larger ceiling postpones quadratic growth;
+processes. Those measurements supported retaining the then-production ceiling and obtaining
+target-workload counts and annotation/assembly footprints before proposing another capacity
+increase. A larger ceiling postpones quadratic growth;
 partial pair assessment would require a separate scientific-policy design.
 
 A later experiment at `99ba4aa`, again changing only the isolated pair ceiling to 200,000, did
@@ -194,6 +196,36 @@ not accepted. A read-only scalar check found zero pair rows and compound evidenc
 expected single-candidate evidence row count retained; it did not establish complete rollback
 payload equality. The later identical-update optimization passed the checks above but does not
 retroactively resolve this failed trial or authorize a larger cap.
+
+### Current pair-work policy and bounded validation
+
+A later single synthetic trial (035) at `d29edddd` used the committed 512-row storage batches and
+changed only the isolated shared cap to 200,000. Its 632 candidates produced 199,396 complete pair
+rows, 3,792 evidence rows and all 28 ranking contexts. The supervised worker took 65.78 seconds,
+including 59.81 seconds for inheritance; a separate independent artifact checker took 5.16 seconds.
+Sampled peak process-family RSS was 1,513,181,184 bytes. DuckDB allocator memory immediately before
+and after pair commit was 357,552,270 and 33,214,606 bytes respectively; these are distinct from RSS.
+The minimum observed available host memory was 1,555,718,144 bytes. The decimal 1 GB DuckDB limit,
+one-thread/no-spill measured settings and all existing outer time, RSS, memory, output and disk
+guards passed. Unchanged fixture initialization used the constructor's two-thread/default-spill
+settings.
+
+All nine complete ordered table hashes agreed after close/read-only reopen and independent streamed
+verification. The full observation was saved and hashed, and all four saved exports matched the
+complete table contents. Scientific source,
+fixture construction and hashing/export instrumentation continued from the earlier 447-candidate
+512-row comparison. No surviving 632-candidate output oracle was used: this single run establishes
+internal artifact consistency for this fixture, not historical payload equality, reproducibility,
+scientific accuracy or whole-case capacity. It excludes annotation, assembly, phenotype evidence
+generation and production stage publication/resume. The earlier out-of-memory trial remains failed.
+
+The shared execution and coverage-preflight ceiling is now 200,000 potential pairs. The
+633-candidate boundary has 200,028 potential pairs and is refused before pair evaluation or pair
+writes; its preceding single-candidate evidence transaction remains committed. Candidate reads
+remain bounded to 128 pairs and 256 decoded candidates, pair writes to 512 rows and evidence
+batches to 256 rows. Resource guards, candidate membership and scientific evidence semantics are
+unchanged. A preflight receipt recording the former 100,000-pair budget is rejected by ranking;
+existing code-bound resume rules still require a fresh run after this policy change.
 
 ## Remaining expansion gates
 
@@ -385,7 +417,7 @@ no pairs or pair payloads are materialized during counting.
 
 The preflight considers all assembled candidates, including cross-shard combinations, because the
 conservative branch retains the full source. The report stays private and records whether the
-unchanged 100,000-pair budget is satisfied. A larger count commits the report but prevents ranking
+shared 200,000-pair budget is satisfied. A larger count commits the report but prevents ranking
 from starting, including on resume. Annotation, validation and assembly remain available. It never
 filters candidates or changes the cap to make the run pass. Execution also retains its own
 branch-specific budget check. The count measures enumeration work, not retained evidence, causal

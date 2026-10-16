@@ -401,6 +401,7 @@ def test_import_annotations_without_execution_and_revalidate_current_tables(tmp_
         assert (reused.output / f"validation_{n:06d}" / "proof.json").is_file()
     report = a.read_json(reused.output / "pair_preflight" / "pair_workload.json")
     assert report["eligible_candidate_pairs"] == 2
+    assert report["pair_work_budget"] == 200_000
     assert report["within_budget"] and not report["retained_pair_count_assessed"]
     c.run_batch(reused)
     assert a.read_json(reused.output / "run.json") == journal
@@ -542,6 +543,29 @@ def test_over_budget_global_preflight_persists_and_blocks_ranking_on_resume(tmp_
         assert (
             a.verify_assembly(spec.output / "assembly")["coverage"]["included_source_records"] == 2
         )
+
+
+def test_ranking_refuses_preflight_from_previous_pair_budget(tmp_path, monkeypatch):
+    spec = setup(tmp_path)
+    validations = validated(spec, monkeypatch)
+    assembly = spec.output / "assembly"
+    assembly.mkdir()
+    a.assemble_verified(spec.plan, validations, assembly)
+    preflight = spec.output / "pair_preflight"
+    preflight.mkdir()
+    with monkeypatch.context() as old_policy:
+        old_policy.setattr(c, "PAIR_WORK_BUDGET", 100_000)
+        c.run_stage(spec, "pair_preflight", preflight)
+    report = a.read_json(preflight / "pair_workload.json")
+    assert report["pair_work_budget"] == 100_000 and report["within_budget"] is True
+    assert report["assembly_integrity_sha256"] == sha256(assembly / "integrity_manifest.json")
+    monkeypatch.setattr(c, "phase5_run", lambda *_: pytest.fail("Ranking must not start"))
+    ranking = spec.output / "ranking"
+    ranking.mkdir()
+    with pytest.raises(ValueError, match="preflight blocks"):
+        c.run_stage(spec, "ranking", ranking)
+    assert not list(ranking.iterdir())
+    assert a.read_json(preflight / "pair_workload.json") == report
 
 
 def test_reuse_worker_does_not_require_annotation_execution_permission(tmp_path, monkeypatch):
