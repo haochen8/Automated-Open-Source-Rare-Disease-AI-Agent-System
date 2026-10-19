@@ -46,3 +46,59 @@ provenance record.
 
 The repository's privacy policy continues to apply. Public submission instructions do
 not authorize publishing private runs, patient-derived metrics or reports to Git.
+
+## Provisional local CSV format check
+
+`scripts/track1_validate.py` checks an explicitly supplied CSV against
+`track1-provisional-local-v1`. It is a standalone standard-library tool: it does not load
+saved analyses, choose candidates, resolve source alleles, generate probabilities, write
+reports or submit files. Keep real candidate files outside Git and use this tool only
+within an authorized private-data scope.
+
+```sh
+.venv/bin/python scripts/track1_validate.py \
+  --input /absolute/private/path/candidates.csv \
+  --expected-proband SUPPLIED_LABEL \
+  --order-policy descending-epcr-preserve-input-ties
+```
+
+The interpreter path is an example; select an existing environment explicitly. The
+expected proband label and row order are supplied decisions, not inferred sample linkage
+or scientific recommendations. The validator requires the exact twelve-column template
+header, one to ten rows, complete first-variant fields, an entirely empty or complete
+second-variant tuple, positive ASCII-decimal integer positions, distinct pair endpoints
+and no duplicate singletons or unordered pairs. Chromosome labels are compared literally;
+positions are compared numerically and allele letters case-insensitively for duplicate
+checks only. Structural fields and the supplied proband label reject surrounding
+whitespace and ASCII control characters. Notes may contain quoted line breaks; NUL is
+rejected in every field.
+EPCR must remain finite and in `(0, 1]` when parsed as a floating-point value, including
+rejection of overflow or underflow to zero. Rows must already be in descending EPCR
+order. Equal values retain their supplied input order. It does not
+impose an EPCR sum rule, calibrate values, reorder rows, normalize alleles or silently
+default the required `primary`/`secondary` classification.
+
+Input is limited to a stable regular file of at most 1 MiB, with at most 8 KiB per UTF-8
+field. These are local engineering bounds. Successful validation returns exit code 0
+and a fixed JSON status: format validation is `valid`, the official contract is
+`unverified`, and source binding, coverage and submission readiness are `not_assessed`.
+Refusal returns exit code 2 and the fixed error `TRACK1_FORMAT_VALIDATION_REFUSED`, without
+candidate values or raw exceptions. No output files are created.
+
+The public-source review on 2026-10-19 found the
+[template header](https://huggingface.co/spaces/SageBio/rare-disease-real-kid-mva-hackathon-2026/blob/main/static/templates/track1_submission_template.csv)
+and the parser's EPCR range and stable ordering in
+[evaluation.py](https://huggingface.co/spaces/SageBio/rare-disease-real-kid-mva-hackathon-2026/blob/main/evaluation.py).
+The Space listing displayed revision `60e1c30e337ce6fe01813040dbe49979eb8c50aa`, but the
+review used rendered `main` pages and did not verify exact revision bytes. The local
+contract deliberately rejects incomplete pairs, duplicate candidates and missing
+classification that the public parser can accept or alter. A local pass therefore does
+not establish exact organizer-parser equivalence or official compliance.
+
+Before packaging actual predictions, independently review source-allele mappings, build
+provenance, coverage, candidate interpretation and EPCR justification. The organizer's
+[methods update](https://huggingface.co/spaces/SageBio/rare-disease-real-kid-mva-hackathon-2026/discussions/10)
+requires the latest template's LLM disclosure; PDF or Markdown is the report upload
+format, while the workbook is a preparation template. Its complete questions remain
+unverified here. The general rules' video requirement and the Track 1 form's lack of a
+video field remain unresolved. Neither uncertainty is cleared by a valid CSV.

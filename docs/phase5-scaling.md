@@ -484,3 +484,20 @@ Committed stages are immutable and checksummed; interrupted uncommitted work is 
 Changed source, references, resources, implementation or committed artifacts require a fresh run.
 The nine-shard synthetic oracle tests scientific equivalence with an unpartitioned control. It is
 not a whole-case capacity forecast, independent accuracy evaluation or submission-readiness claim.
+
+### Capacity decisions after a pair-work refusal
+
+Smaller read batches, streaming writes and faster comparisons can reduce resource use, but they
+do not change the number of eligible combinations admitted by this contract. A blocked corpus
+therefore does not become admissible through those implementation improvements alone. Adding
+more annotation bundles cannot resolve the existing total-work refusal, and a smaller selected
+union is a different coverage scope rather than completion of the blocked analysis.
+
+A proposal for a different admission policy must state the new work bound explicitly and preserve
+exact eligibility, cross-shard combinations, conservative/rescue membership and inspectable
+evidence. It needs synthetic equivalence checks against explicit enumeration, adversarial group
+sizes and comparable measurements of runtime, peak memory, output size and failure recovery.
+Any proposal must also account for the existing live resource limits and atomic stage publication.
+An improvement on a compact synthetic fixture is not evidence that a larger private corpus fits.
+Until a separately scoped, validated policy is adopted, retain the current refusal and its saved
+artifacts; do not raise the cap or bypass the preflight to obtain a completed run.
