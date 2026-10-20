@@ -227,6 +227,63 @@ batches to 256 rows. Resource guards, candidate membership and scientific eviden
 unchanged. A preflight receipt recording the former 100,000-pair budget is rejected by ranking;
 existing code-bound resume rules still require a fresh run after this policy change.
 
+### Isolated 320,000-pair screen
+
+The synthetic-only 063 screen on 2026-10-20 used committed source `cd3441be` and two
+archives differing only in the shared pair-work constant: 200,000 versus 320,000.
+Production remains at 200,000. Before the measured workloads, complete results for a
+diverse 40-candidate fixture matched across current code, experimental code and a
+per-pair full-evaluator reference, separately for affected, unaffected and unknown
+status. Comparisons covered ordered evaluator inputs, observations, nine persisted
+relations, all 28 ranking contexts and four exports without payload normalization.
+The 200,028- and 320,001-pair refusal cases preserved the exact preceding
+single-candidate evidence, with no pair evaluation, pair writes or ranking.
+
+| Synthetic workload | Candidates | Eligible pairs | Analysis | Complete worker |
+| --- | ---: | ---: | ---: | ---: |
+| Current-cap control, one group | 632 | 199,396 | 61.99 s | 139.93 s |
+| Experimental groups plus singleton padding | 10,000 | 320,000 | 130.22 s | 345.85 s |
+
+The experimental groups contained 800, 28, 7 and 2 candidates. Another 9,163
+assigned singleton groups added no eligible pairs and remained in all 28 ranking
+contexts. Both measured cases passed complete ordered table checks after read-only
+reopening and comparisons against all four exports. These are single observations;
+changing both candidate and pair counts does not isolate a pair-scaling speed ratio.
+The 10,000-candidate fixture is a declared synthetic envelope, not an estimate or
+verified bound for a private workload or its payload widths.
+
+The entire seven-case screen took 501.14 seconds. At 0.2-second sampling intervals,
+peak coordinator/worker-family RSS was 2,236,731,392 bytes, peak aggregate artifacts
+were 250,571,770 bytes, minimum available memory was 1,574,543,360 bytes and minimum
+free disk was 33,837,883,392 bytes. Accounting included source archives, fixtures,
+databases, WAL/temporary files, exports, logs and receipts. The screen retained a
+3 GiB RSS limit, 2 GiB aggregate output limit, 3,600-second aggregate deadline,
+600 seconds per worker, 1 GiB available memory at entry, 256 MiB live reserve and
+25 GiB free-disk reserve. These sampled observations do not bound unsampled peaks.
+
+Native initialization retained decimal 1 GB DuckDB memory, two threads and default
+spill behavior. Subsequent analysis and checks used decimal 1 GB, one thread and no
+spill. The screen excluded annotation, corpus validation/assembly, production stage
+publication/resume and research-report generation. It did not verify a full workflow
+under production's analytical settings. Source identities and the existing canonical
+PASS were checked before and after; the worker and supervisor also passed 18 and 58
+focused synthetic tests respectively. Receipts and reviewed source archives stay
+outside Git. This result establishes this screen's consistency and observed resource
+use, not accuracy, reproducibility, whole-case coverage or private-workload admission.
+
+#### Proposed next policy review
+
+A prospective versioned policy may propose 320,000 as the shared preflight/execution
+ceiling while preserving exact eligibility, cross-shard combinations, complete
+conservative/rescue membership, transactional evidence and immutable stages. This
+proposal is not adopted. Before adoption, validate the exact boundary in both callers,
+the intended production resource settings and the full publication/recovery path;
+account for referenced inputs and all output stages under the existing outer budgets.
+Any comparison with a private workload must use explicitly scoped evidence and leave
+unmeasured payload widths or resource costs unknown. A changed policy requires current
+canonical verification and fresh code-bound preparation; this screen does not authorize
+resuming an old analysis under a new checksum or retrying a refused private run.
+
 ## Remaining expansion gates
 
 Use the sampler only within its existing cap. For disjoint coverage preparation, use the interface
