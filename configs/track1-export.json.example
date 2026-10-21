@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "source_directory": "/absolute/restricted/path/to/sealed-selection",
+  "source_integrity_sha256": "REPLACE_WITH_VERIFIED_SHA256_OF_SOURCE_INTEGRITY_MANIFEST",
+  "expected_proband": "PROBAND01",
+  "chromosome_mapping_policy": "grch38-primary-chr-prefix-v1",
+  "output_directory": "/absolute/restricted/path/to/new-export"
+}

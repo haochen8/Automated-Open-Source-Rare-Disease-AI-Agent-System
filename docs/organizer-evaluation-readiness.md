@@ -187,12 +187,22 @@ settings must remain unverified until the participant supplies them.
 The [submission policy](../scripts/track1_submission_policy.py) uses the frozen
 `filtering_phenotype_inheritance` order and at most 100 distinct source-allele anchors to
 emit at most ten hypotheses. Called homozygous-alternate or haploid-alternate genotypes,
-or explicit positive de novo evidence with called reference parents and quality support,
-can produce preferred singletons. Otherwise it chooses the first compatible saved
+or explicit positive de novo evidence with called reference parents and a passing saved quality
+flag, can produce preferred singletons. Otherwise it chooses the first compatible saved
 same-gene/chromosome heterozygous pair by descending confidence, partner rank, and stable
 source identifiers. A partner may lie beyond the anchor window. Saved phase uncertainty
 is preserved; absence of an eligible pair permits an explicitly exploratory singleton.
 Endpoints and equivalent normalized coordinates are not reused. All rows are primary.
+The inherited quality flag rejects failing observed measurements but allows missing genotype
+quality and allele-fraction values. A passing flag therefore does not establish complete quality
+evidence. Pair compatibility does not establish a gene-disease association, recessive disease
+mechanism, or allele pathogenicity.
+
+The [final exporter](track1-export.md) can apply an explicit `chr` presentation mapping to a
+sealed draft after checking its agreement with the selection audit. It retains the audit's
+source coordinates and preserves nonchromosome CSV fields. Reproducing this stage does not
+reproduce or independently validate the preceding analysis or selection. Local changes must
+be identified as unpublished until the linked repository actually contains them.
 
 For output rank `r`, the policy assigns `p_r = 0.50 × (1 − 0.80) × 0.80^(r − 1)`.
 This is an explicitly subjective, uncalibrated EPCR forecast, not a conversion of heuristic
@@ -203,7 +213,12 @@ EPCR in `(0, 1]`, orders descending with stable ties, and imposes no sum-to-one 
 
 This route does not require outside expert review or manual biological curation, and claims
 neither. It can reuse an authorized bounded completed analysis while retaining incomplete
-coverage and unconfirmed sample/phenotype linkage or affected status. It does not invent
+coverage and unresolved sample/phenotype linkage or affected status. A completed report must
+disclose the actual saved configuration and pedigree flags separately from their independently
+verified basis. In Phase 5, `confirmed_affected_sample` controls the analyzed individual's
+affected status and saved linkage declaration; unknown affected status caps inheritance fit.
+An unconfirmed basis does not mean the saved analysis used false or unknown flags. Packaging
+preserves the resulting evidence and ranking without recomputation. It does not invent
 annotations, truth labels, or scientific evidence. The 28 ranking contexts are correlated
 sensitivity checks, not independent validation. Actual use, measured results, private
 provenance, and candidate contents belong only in the separately authorized private package;

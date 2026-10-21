@@ -37,6 +37,13 @@ DuckDB. Source alleles, normalized GRCh38 representations, genotype reconciliati
 provenance, and committed-stage checksums remain separately inspectable. Unresolved source
 binding must prevent export.
 
+Record code identities for the saved analysis, hypothesis-selection adapter, and final export
+separately: [verified revisions or source snapshots]. Reproducing an export from sealed prior
+candidates does not reproduce their upstream analysis or selection. Identify any unpublished
+local changes explicitly; a linked repository revision does not establish their availability.
+The optional [final exporter](track1-export.md) documents the sealed inputs needed for that
+formatting stage and its limits.
+
 The deterministic ranker combines quality, population rarity, consequence, phenotype, and
 inheritance features through a configured weighted linear score. Phenotype matching uses HPO
 ontology and gene associations with Resnik best-match-average similarity. Population frequency
@@ -49,6 +56,28 @@ Selection uses the frozen `filtering_phenotype_inheritance` order. The workflow'
 are correlated feature/weight sensitivity checks, not independent experiments, votes, or
 replications. Neither their agreement nor the weighted score is a calibrated causal probability.
 
+### Saved configuration and independent confirmation
+
+Complete these declarations from the saved specification, pedigree, and receipts:
+
+| Saved declaration | Value used by the analysis |
+| --- | --- |
+| `confirmed_affected_sample`, if this entry point was used | [true / false / unavailable] |
+| Analyzed individual's pedigree `affected` value | [true / false / null / unavailable] |
+| `sample_phenotype_linkage_confirmed`, if recorded | [true / false / unavailable] |
+
+These are configured inputs and saved declarations. State separately whether supplied evidence
+independently establishes local file-to-sample identity, phenotype linkage, and affected status:
+[describe the verified basis for each, or state that it remains unconfirmed]. A saved flag named
+`confirmed` is not itself independent confirmation. Do not describe a true configured flag as
+false merely because its supporting evidence remains unconfirmed.
+
+In the Phase 5 entry point, `confirmed_affected_sample=true` sets pedigree `affected=true` and
+the saved linkage flag to true; false sets affected status to unknown. The inheritance evaluator
+caps fit when affected status is unknown, so this configuration can affect ranking. HPO similarity
+uses the supplied phenotype terms. Packaging preserves the saved evidence and order; it does not
+change these declarations, recompute scores, or resolve uncertainty about the supplied inputs.
+
 ### Converting ranked alleles to submission hypotheses
 
 The deterministic policy examines the first 100 distinct source alleles in the frozen order
@@ -58,7 +87,7 @@ and greedily emits at most ten hypotheses:
    coordinate representation. Unknown or reference genotype calls do not form a hypothesis.
 2. Prefer a singleton for a called homozygous-alternate or haploid-alternate genotype. Also
    permit a singleton when saved positive de novo evidence is accompanied by two called
-   reference parents and the required quality support. These are conditional evidence rules;
+   reference parents and a true saved `quality_checks_passed` flag. These are conditional rules;
    the policy does not establish sample identities, parentage, affected status, or causality.
 3. Otherwise consider saved pairs with heterozygous calls, a shared gene and chromosome, and
    no recorded contradiction. Choose the first eligible pair in descending saved confidence,
@@ -68,9 +97,17 @@ and greedily emits at most ten hypotheses:
    confirmed trans. If no eligible pair exists, retain an explicitly exploratory singleton.
 5. Consume both endpoints of an emitted pair. Do not reuse endpoints or emit coordinate
    duplicates. Duplicate comparison ignores chromosome `chr` prefixes and letter case;
-   exported coordinates themselves remain the verified normalized representation.
+   the selection audit preserves the supplied source-normalized coordinates. An optional
+   [final export](track1-export.md) maps bare nuclear chromosome labels to their canonical
+   `chr`-prefixed forms while preserving positions, alleles, row order, EPCR, and all other
+   field values. This presentation mapping is not liftover or allele renormalization.
 
 The implementation is [the submission policy](../scripts/track1_submission_policy.py).
+The saved inheritance quality flag means that the evaluator found no failing observed genotype
+quality or alternate-fraction value under its thresholds. Missing values do not fail that check;
+a true flag does not establish that these measurements were available or sufficient. Pair
+compatibility concerns the saved genotype, gene, chromosome, and phase fields. It does not
+establish a gene-disease association, a recessive disease mechanism, or allele pathogenicity.
 The organizer's public handler requires `PROBAND01` as the challenge-case label. This label
 is submission metadata and does not establish which biological person a local sample represents.
 
@@ -98,10 +135,11 @@ accepts EPCR in `(0, 1]`, orders rows by descending EPCR, and preserves input or
 ### Scope and limitations
 
 This route has incomplete case coverage because it reuses a bounded analysis and further
-limits hypothesis anchors. Phenotype-to-sample linkage and affected status are unconfirmed
-for the intended route; preserve those uncertainties in the completed report unless separately
-established by supplied evidence. Do not infer parentage, sex, pathogenicity, or phase from
-missing information. No clinical truth labels are available to validate the intended submission.
+limits hypothesis anchors. Disclose the actual saved linkage and affected-status configuration
+above, separately from whether supplied evidence independently confirms it. Preserve unresolved
+uncertainties without relabeling the saved configuration. Do not infer parentage, sex,
+pathogenicity, or phase from missing information. No clinical truth labels are available to
+validate the intended submission.
 Synthetic correctness checks and correlated sensitivity contexts do not establish performance
 on independent cases. The output consists of research hypotheses, not clinical findings.
 
@@ -173,6 +211,7 @@ The assistant subscription belongs in A10 and is not itself a biological evidenc
 The method can emit single variants and saved same-gene, same-chromosome compound-heterozygous
 hypotheses. Both endpoints must have compatible heterozygous calls. It preserves saved phase
 uncertainty and does not infer trans inheritance merely from two variants sharing a gene.
+Pair compatibility does not establish gene-disease validity or pathogenicity of either allele.
 An exploratory singleton does not assert a dominant, de novo, or recessive causal explanation.
 
 ## A17. Secondary or incidental findings
@@ -200,7 +239,8 @@ and rescue behavior preserve candidates without known phenotype associations.
 
 Submission selection scans the first 100 distinct source alleles in one frozen ranking context
 and emits at most ten hypotheses. It conditionally prefers called homozygous-alternate,
-haploid-alternate, or explicitly quality-supported de novo singletons. Otherwise, it selects
+haploid-alternate, or de novo singletons with called reference parents and a passing saved
+quality flag. Missing quality measurements can still pass that flag. Otherwise, it selects
 the strongest compatible saved same-gene, same-chromosome heterozygous pair using deterministic
 confidence and rank ordering. Pair partners may fall outside the anchor window. Saved phase
 uncertainty is preserved; an exploratory singleton is retained when no eligible pair exists.
@@ -212,7 +252,9 @@ ranking scores into measured probabilities, and are not renormalized over the se
 Residual mass represents omitted explanations and uncertainty in the modeling assumptions.
 
 The approach supports reproducibility and inspectable reasoning, but coverage is bounded and
-incomplete. Phenotype/sample linkage and affected status remain unconfirmed for this route.
+incomplete. Saved linkage and affected-status settings are disclosed separately from independent
+confirmation; packaging preserves their effects and does not resolve input uncertainty. Compatible
+pairs do not establish a gene-disease mechanism or allele pathogenicity.
 Clinical truth labels are unavailable, and the 28 correlated ranking contexts are sensitivity
 checks rather than independent validation. AI assistance supports engineering and review;
 the selected pipeline performs no live patient-data model inference. No external genetics
