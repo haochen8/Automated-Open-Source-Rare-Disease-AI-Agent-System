@@ -37,12 +37,21 @@ DuckDB. Source alleles, normalized GRCh38 representations, genotype reconciliati
 provenance, and committed-stage checksums remain separately inspectable. Unresolved source
 binding must prevent export.
 
-Record code identities for the saved analysis, hypothesis-selection adapter, and final export
+Record code identities for the saved analysis, hypothesis selector, and final export
 separately: [verified revisions or source snapshots]. Reproducing an export from sealed prior
 candidates does not reproduce their upstream analysis or selection. Identify any unpublished
 local changes explicitly; a linked repository revision does not establish their availability.
-The optional [final exporter](track1-export.md) documents the sealed inputs needed for that
-formatting stage and its limits.
+The [public reproduction guide](track1-reproduction.md) documents source preparation, pinned
+offline annotation or reuse, corpus analysis, saved-result selection, and export, with complete
+data-free configuration examples. The [public selector](../scripts/track1_select.py) verifies a
+pinned completed corpus and recovers source mappings and saved evidence before applying the
+frozen policy; it does not perform new annotation, recompute evidence, or rerank candidates.
+The [final exporter](track1-export.md) documents the sealed inputs needed for formatting.
+
+Report these separately: [published code revision], [exact private input/resource/configuration
+provenance retained locally], and [starting stage, scope, and comparison results of any empirical
+reproduction]. Availability of this code route does not establish that a full raw-input-to-final
+replay was performed. Preserve the original analysis identity when reusing historical results.
 
 The deterministic ranker combines quality, population rarity, consequence, phenotype, and
 inheritance features through a configured weighted linear score. Phenotype matching uses HPO
@@ -260,3 +269,13 @@ checks rather than independent validation. AI assistance supports engineering an
 the selected pipeline performs no live patient-data model inference. No external genetics
 expert review or manual biological curation is claimed. These are research hypotheses, with
 no claim of empirical clinical accuracy or established causality.
+
+## Acknowledgement — outside the abstract
+
+[Copy the organizer-prescribed acknowledgement verbatim from the current official
+[rules](https://huggingface.co/spaces/SageBio/rare-disease-real-kid-mva-hackathon-2026/blob/main/tabs/rules.py)
+into this section of the completed private report. The rules require the acknowledgement for
+publications, preprints, conference abstracts, and other public communications using the data.
+Retain the reviewed rules revision/date in local provenance. Keep this section separate from
+A19 so that it is not included in the abstract's 500-word limit. Do not substitute a paraphrase
+or leave this instruction placeholder in the completed report.]

@@ -139,6 +139,13 @@ An [incidental-findings discussion](https://huggingface.co/spaces/SageBio/rare-d
 remains referred to privacy/IRB review, with interim advice to keep the affected repository
 private. General publication language does not clear incidental findings for disclosure.
 
+The [rules](https://huggingface.co/spaces/SageBio/rare-disease-real-kid-mva-hackathon-2026/blob/main/tabs/rules.py)
+also prescribe an acknowledgement for publications, preprints, conference abstracts, and other
+public communications using the data. Copy the required wording verbatim into the completed
+report's acknowledgement section, outside the A19 abstract. The
+[methods template](track1-methods-template.md#acknowledgement--outside-the-abstract) reserves that
+section without reproducing the external passage here.
+
 Video remains a documentation ambiguity. The general rules describe a three-minute recording
 for every team. The [track overview](https://huggingface.co/spaces/SageBio/rare-disease-real-kid-mva-hackathon-2026/blob/main/tabs/about.py)
 lists video for Track 2, while the Track 1 form has no video input. The inspected Track 1
@@ -198,11 +205,21 @@ quality and allele-fraction values. A passing flag therefore does not establish 
 evidence. Pair compatibility does not establish a gene-disease association, recessive disease
 mechanism, or allele pathogenicity.
 
-The [final exporter](track1-export.md) can apply an explicit `chr` presentation mapping to a
+The [public selector](../scripts/track1_select.py) applies that policy to immutable saved
+source mappings and evidence recovered from a pinned completed corpus. It verifies the saved
+journal chain, then reproduces selection and EPCR allocation without new annotation, scientific
+evidence computation, or reranking. The [reproduction guide](track1-reproduction.md) connects
+the public source-accounting, materialization, annotation/corpus, selector, and export commands
+and supplies complete data-free configuration examples. Authentic inputs, resource receipts,
+saved declarations, and historical code identities must still be supplied privately.
+
+The [final exporter](track1-export.md) applies an explicit `chr` presentation mapping to a
 sealed draft after checking its agreement with the selection audit. It retains the audit's
 source coordinates and preserves nonchromosome CSV fields. Reproducing this stage does not
-reproduce or independently validate the preceding analysis or selection. Local changes must
-be identified as unpublished until the linked repository actually contains them.
+reproduce or independently validate the preceding analysis or selection. Distinguish code
+availability, exact private provenance, and an empirically completed replay from a stated
+starting stage. This documentation does not claim that a complete raw-input-to-final replay
+has been performed. Local changes remain unpublished until the linked repository contains them.
 
 For output rank `r`, the policy assigns `p_r = 0.50 × (1 − 0.80) × 0.80^(r − 1)`.
 This is an explicitly subjective, uncalibrated EPCR forecast, not a conversion of heuristic

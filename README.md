@@ -50,7 +50,7 @@ flowchart TB
 
     subgraph OUT["Private outputs"]
         O1["Rankings, complete evidence and research report<br/>Coverage and uncertainty retained"]
-        O2["Frozen saved-analysis selection<br/>Public policy; upstream local adapter required"]
+        O2["Frozen saved-analysis selection<br/>Public corpus selector and policy"]
         O3["Sealed CSV export and mapping audit<br/>Explicit chr presentation; order and EPCR preserved"]
         O4["Methods report<br/>Resource provenance, limitations and AI disclosure"]
         O1 -. "source-bound saved inputs required" .-> O2
@@ -72,12 +72,16 @@ flowchart TB
     O4 -.-> H1
     classDef resource fill:#e9f5ed,stroke:#3f8051
     class R1,R2 resource
+    click O2 "scripts/track1_select.py" "Public saved-analysis selector"
 ```
 
 The diagram describes implemented responsibilities, not a claim that every branch has completed
-for a whole case. The saved-analysis adapter and its historical inputs are distinct from the
-public final exporter: exporting an existing sealed selection does not reproduce upstream
-annotation, analysis or selection. The [engineering work ledger](docs/subagents/README.md)
+for a whole case. The [reproduction guide](docs/track1-reproduction.md) connects the public source
+preparation, annotation/corpus analysis, saved-result selection, and export commands. Exact input,
+resource and historical configuration identities must still be supplied privately; code availability
+does not establish that a complete raw-input replay has been performed. Exporting an existing
+sealed selection does not reproduce upstream annotation, analysis or selection.
+The [engineering work ledger](docs/subagents/README.md)
 lists recorded delegated workers and their task labels; current verification status is established by
 the local canonical gate, not by historical task summaries.
 
@@ -217,6 +221,16 @@ unavailable or rejected hypotheses. Pair confidence is an ordering key, not a pr
 The policy's anchor and output bounds, tie handling and exact rules are documented in the
 [methods template](docs/track1-methods-template.md).
 
+The [public selector](scripts/track1_select.py) binds that policy to a pinned completed corpus.
+It verifies the saved journal chain, recovers immutable source mappings and evidence, and emits
+a sealed selection without new annotation, evidence computation or reranking. Copy the
+[selector example](configs/track1-select.json.example) into restricted storage and supply authentic
+local provenance, the recorded analysis commit, a trusted corpus-journal digest, and a fresh output:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/track1_select.py --config /absolute/restricted/path/select.json
+```
+
 EPCR means *estimated probability of causal relationship*. The policy assigns an explicitly
 subjective, uncalibrated geometric forecast by emitted row rank and leaves residual probability
 for omitted or unmodeled explanations. It does not convert ranking scores into probabilities or
@@ -241,9 +255,10 @@ using a previously verified source seal and a fresh output directory outside Git
 The exporter writes `submission.csv`, a mapping/provenance audit and a new integrity manifest
 atomically, without rewriting its inputs. It performs no annotation, analysis, hypothesis
 selection, EPCR allocation or upload. Reproducing this formatting stage requires the earlier
-sealed artifacts; the public repository alone does not reconstruct the historical local
-saved-analysis adapter and all upstream inputs. Read [export reproduction and limits](docs/track1-export.md)
-before using it.
+sealed artifacts. For the complete public code route and configuration examples, read
+[bounded workflow reproduction](docs/track1-reproduction.md); for formatting alone, read
+[export reproduction and limits](docs/track1-export.md). Neither code publication nor an export
+comparison independently establishes exact private provenance or a complete upstream replay.
 
 The separate [CSV validator](scripts/track1_validate.py) checks the local structural contract.
 A format pass does not verify source binding, biological interpretation, coverage or official
@@ -254,7 +269,8 @@ Prepare the completed methods report outside Git from [the public template](docs
 Record the actual software/resource identities, coverage limits, configured affected/linkage
 declarations, independently supported facts and remaining uncertainty. Disclose engineering and
 scientific AI use accurately, including verified provider/tier/data-handling settings where
-applicable. A configuration flag is not independent biological confirmation. Human local review
+applicable. Include the organizer-prescribed acknowledgement outside the abstract. A configuration
+flag is not independent biological confirmation. Human local review
 of the CSV and report and manual organizer upload remain pending. Confirm disclosure authorization
 before uploading; the pipeline does not claim an external submission or evaluation result.
 
@@ -272,6 +288,8 @@ and [restricted-data setup](data/README.md) before any authorized-data work.
 | [`configs/default.yaml`](configs/default.yaml) | Validated paths, privacy settings, runtime bounds and preliminary scoring. |
 | [`configs/scoring.yaml`](configs/scoring.yaml) | Explicit research score weights. |
 | [`configs/models.yaml`](configs/models.yaml) | Shared local-model profile and backend-substitution examples. |
+| [`configs/track1-coverage-plan.json.example`](configs/track1-coverage-plan.json.example), [`configs/track1-coverage-batch.json.example`](configs/track1-coverage-batch.json.example), [`configs/track1-corpus.json.example`](configs/track1-corpus.json.example) | Data-free templates for bounded source preparation, pinned offline annotation and corpus analysis. |
+| [`configs/track1-select.json.example`](configs/track1-select.json.example), [`configs/track1-export.json.example`](configs/track1-export.json.example) | Private provenance pins and fresh destinations for saved-result selection and final CSV formatting. |
 | [`.env.example`](.env.example) | Environment overrides and tracing settings. |
 
 Nested overrides use the `RDA_` prefix and double underscores, for example
@@ -329,6 +347,7 @@ and [the repository agent contract](AGENTS.md) for the authoritative workflow.
 | [Scaling](docs/phase5-scaling.md) | Source coverage, annotation batches, corpus assembly and resource gates. |
 | [Case evaluation](docs/case-evaluation.md) | Explicit truth binding, retrieval metrics and failed-case accounting. |
 | [Methods template](docs/track1-methods-template.md) | Selection, subjective EPCR, evidence limitations and disclosures. |
+| [Reproduction guide](docs/track1-reproduction.md) | Public commands, complete configuration examples and private provenance requirements from bounded source preparation to final CSV. |
 | [Final export](docs/track1-export.md) | Required sealed inputs, chromosome mapping and reproduction limits. |
 | [Engineering work ledger](docs/subagents/README.md) | Recorded engineering workers and runtime-role distinctions. |
 

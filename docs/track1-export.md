@@ -11,27 +11,31 @@ annotation, inheritance computation, ranking, hypothesis selection, or EPCR
 allocation. It cannot establish that earlier processing was scientifically
 correct, that its inputs were complete, or that the organizer will accept the
 submission. The [policy](../scripts/track1_submission_policy.py) is available
-separately; invoking this exporter does not invoke that policy again.
+separately; invoking this exporter does not invoke that policy again. For the public
+source-preparation, corpus-analysis and selector route, use the
+[bounded reproduction guide](track1-reproduction.md).
 
 ## Required earlier artifacts
 
-The source directory must already contain the four files emitted by the earlier
-`saved-computational-submission-064-v1` adapter:
+The source directory must already contain the four files in the
+`portable-saved-selection-v1` format produced by the [public selector](../scripts/track1_select.py).
+The historical `saved-computational-submission-064-v1` format is also accepted:
 
 - `draft.csv`: the frozen selected hypotheses in submission order.
 - `audit.json`: the saved selection, including endpoint source alleles, row ranks,
   EPCR strings, original evidence, and limitations.
-- `manifest.json`: the earlier adapter version/status and draft/audit hashes.
+- `manifest.json`: the selection format version/status and draft/audit hashes.
 - `integrity_manifest.json`: the hashes of those three files.
 
 These are restricted derived artifacts. Supply their existing location outside
-Git; do not copy them into this repository or publish them. The historical
-adapter consumed a completed bounded analysis and its sealed saved assessment,
-with their original source mappings, evidence, rankings, resource receipts, and
-integrity chain. That adapter and its launcher dependencies were tied to local
-paths and pinned historical code. This command neither generalizes nor reruns
-that earlier chain. An independent end-to-end reproduction still requires those
-upstream inputs and generation code; the final export alone is insufficient.
+Git; do not copy them into this repository or publish them. The public selector
+consumes a pinned completed corpus, verifies its saved journal chain, and recovers
+source mappings and saved evidence before applying the frozen policy. It replaces
+the need for a path-dependent local selection launcher. Historical analyses retain
+their original code identity, resources, and configuration; the public command does
+not make their private provenance available. The complete upstream code route and
+data-free configuration examples are in the [reproduction guide](track1-reproduction.md).
+The final export alone remains insufficient to reproduce that route.
 
 Obtain the expected SHA-256 of the existing `integrity_manifest.json` from a
 trusted prior receipt or separately reviewed local record. Merely calculating a
@@ -103,11 +107,12 @@ path in the configuration changes that audit's hash even when the CSV is identic
 Keep the configuration, source seal, output seal, and reviewed exporter source
 snapshot together in restricted storage for local reproduction.
 
-If this exporter is still a local, uncommitted change, a link to an earlier
-GitHub revision does not make it available there. State that limitation in the
-completed methods report and retain a reviewable data-free source snapshot for
-the local package. Do not describe the public revision as containing this command
-until it actually does. Keeping a local package does not authorize publication
+Record the actual published revisions or reviewed source snapshots for analysis,
+selection, and export separately. A link to an earlier GitHub revision does not
+make later local changes available there. State any unpublished changes in the
+completed methods report. Distinguish source availability, exact private provenance,
+and the stages empirically rerun; an identical final CSV does not demonstrate a
+raw-input-to-final replay. Keeping a local package does not authorize publication
 of its private configuration, audits, CSV, or report.
 
 The [methods template](track1-methods-template.md) distinguishes configured

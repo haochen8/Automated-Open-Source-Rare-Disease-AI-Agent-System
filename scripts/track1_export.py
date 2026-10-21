@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Export a sealed Track 1 selection with an explicit chromosome presentation map.
 
-Only the saved-computational-submission-064-v1 final export stage is reproduced.
+Only the final export stage of supported sealed selections is reproduced.
 Source binding, scientific analysis, hypothesis selection and EPCR allocation are
 not rerun or independently established. All diagnostics are fixed, data-free text.
 """
@@ -27,6 +27,7 @@ import track1_validate as validator
 
 VERSION = "track1-sealed-selection-export-v1"
 SOURCE_VERSION = "saved-computational-submission-064-v1"
+SOURCE_VERSIONS = frozenset({SOURCE_VERSION, "portable-saved-selection-v1"})
 SOURCE_STATUS = "completed_saved_computational_submission_draft"
 POLICY_VERSION = "track1-computational-hypotheses-v1"
 MAPPING_POLICY = "grch38-primary-chr-prefix-v1"
@@ -124,7 +125,7 @@ def render_export(draft: bytes, audit: dict, expected_proband: str) -> tuple[byt
     """Compare saved endpoints/EPCR, then change only chromosome field values."""
     validator.validate_contents(draft, expected_proband, validator.ORDER_POLICY)
     require(audit["schema_version"] == 1 and type(audit["schema_version"]) is int)
-    require(audit["version"] == SOURCE_VERSION and audit["status"] == SOURCE_STATUS)
+    require(audit["version"] in SOURCE_VERSIONS and audit["status"] == SOURCE_STATUS)
     require(audit["policy_version"] == POLICY_VERSION)
     require(audit["proband_label"] == expected_proband)
     require(audit["proband_label_is_biological_identity"] is False)
@@ -240,20 +241,20 @@ def export(config_path: Path) -> None:
     inputs = {name: read_file(source / name) for name in sorted(INPUT_FILES)}
     require(all(integrity[name] == sha256(raw) for name, raw in inputs.items()))
     manifest = strict_json(inputs["manifest.json"])
-    require(manifest["version"] == SOURCE_VERSION and manifest["status"] == SOURCE_STATUS)
+    require(manifest["version"] in SOURCE_VERSIONS and manifest["status"] == SOURCE_STATUS)
     require(
         manifest["artifact_sha256"]
         == {name: integrity[name] for name in ("audit.json", "draft.csv")}
     )
-    corrected, mappings = render_export(
-        inputs["draft.csv"], strict_json(inputs["audit.json"]), config["expected_proband"]
-    )
+    audit = strict_json(inputs["audit.json"])
+    require(audit["version"] == manifest["version"])
+    corrected, mappings = render_export(inputs["draft.csv"], audit, config["expected_proband"])
     code = {Path(__file__).resolve(), Path(validator.__file__).resolve()}
     code_inputs = {path: read_file(path) for path in code}
     export_audit = {
         "schema_version": 1,
         "version": VERSION,
-        "source_version": SOURCE_VERSION,
+        "source_version": manifest["version"],
         "source_integrity_sha256": sha256(integrity_raw),
         "source_artifact_sha256": integrity,
         "configuration_sha256": sha256(config_raw),

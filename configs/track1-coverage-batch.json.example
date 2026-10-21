@@ -1,0 +1,63 @@
+{
+  "plan": "/absolute/restricted/path/source-plan",
+  "partitions": "/absolute/restricted/path/partitions",
+  "shards": [1],
+  "normalization": {
+    "executable": "/absolute/local/tools/bcftools",
+    "executable_sha256": "REPLACE_WITH_VERIFIED_BCFTOOLS_EXECUTABLE_SHA256",
+    "job": {
+      "provider": "bcftools",
+      "tool_version": "REPLACE_WITH_PINNED_BCFTOOLS_VERSION",
+      "data_version": "REPLACE_WITH_PINNED_NORMALIZATION_DATA_VERSION",
+      "genome_build": "GRCh38",
+      "input_path": "/absolute/restricted/path/stage-input.vcf",
+      "output_path": "/absolute/restricted/path/stage-normalized.vcf",
+      "reference_path": "/absolute/public-resource-cache/reference.fa",
+      "reference_sha256": "REPLACE_WITH_VERIFIED_REFERENCE_SHA256",
+      "cache_path": null,
+      "annotation_profile": "minimal",
+      "threads": 1,
+      "buffer_size": 1,
+      "timeout_seconds": 1800,
+      "memory_mb": 320,
+      "output_limit_mb": 512
+    }
+  },
+  "annotation": {
+    "executable": "/absolute/local/tools/vep",
+    "executable_sha256": "REPLACE_WITH_VERIFIED_VEP_EXECUTABLE_SHA256",
+    "job": {
+      "provider": "vep",
+      "tool_version": "REPLACE_WITH_PINNED_VEP_116_VERSION",
+      "data_version": "116",
+      "genome_build": "GRCh38",
+      "input_path": "/absolute/restricted/path/stage-normalized.vcf",
+      "output_path": "/absolute/restricted/path/stage-annotated.vcf",
+      "reference_path": "/absolute/public-resource-cache/reference.fa",
+      "reference_sha256": "REPLACE_WITH_VERIFIED_REFERENCE_SHA256",
+      "cache_path": "/absolute/public-resource-cache/vep-116",
+      "annotation_profile": "track1",
+      "threads": 1,
+      "buffer_size": 1,
+      "timeout_seconds": 1800,
+      "memory_mb": 320,
+      "output_limit_mb": 512
+    }
+  },
+  "ranking": {
+    "original_vcf": "/absolute/restricted/path/original.vcf.gz",
+    "original_index": "/absolute/restricted/path/original.vcf.gz.tbi",
+    "phenotype_docx": "/absolute/restricted/path/phenotype.docx",
+    "annotation_rehearsal": "/absolute/restricted/path/new-annotation-batch/assembly",
+    "hpo_directory": "/absolute/public-resource-cache/normalized-hpo",
+    "output": "/absolute/restricted/path/new-annotation-batch/ranking/run",
+    "confirmed_affected_sample": false,
+    "confirmed_local_research_use": false,
+    "run_id": "replace-with-local-batch-run-id",
+    "dataset_revision": "REPLACE_WITH_VERIFIED_DATASET_REVISION"
+  },
+  "output": "/absolute/restricted/path/new-annotation-batch",
+  "confirmed_local_research_use": false,
+  "confirmed_annotation_execution": false,
+  "reuse_annotations": {}
+}

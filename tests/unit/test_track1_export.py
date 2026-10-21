@@ -79,11 +79,11 @@ def saved_selection():
     return rows, audit
 
 
-def seal(source, rows, audit):
+def seal(source, rows, audit, *, manifest_version=None):
     source.mkdir(exist_ok=True)
     files = {"draft.csv": csv_bytes(rows), "audit.json": exporter.json_bytes(audit)}
     manifest = {
-        "version": exporter.SOURCE_VERSION,
+        "version": audit["version"] if manifest_version is None else manifest_version,
         "status": exporter.SOURCE_STATUS,
         "artifact_sha256": {name: exporter.sha256(raw) for name, raw in files.items()},
     }
@@ -168,6 +168,36 @@ def test_same_source_produces_identical_csv_in_distinct_output_directories(tmp_p
     assert (repeated / "export_audit.json").read_bytes() != (
         output / "export_audit.json"
     ).read_bytes()
+
+
+def test_portable_selection_preserves_identical_csv_and_records_actual_source_version(tmp_path):
+    config_path, config, source, output = supplied(tmp_path)
+    exporter.export(config_path)
+    expected = (output / "submission.csv").read_bytes()
+    rows, audit = saved_selection()
+    audit["version"] = "portable-saved-selection-v1"
+    config["source_integrity_sha256"] = seal(source, rows, audit)
+    config["output_directory"] = str(output.with_name("portable-export"))
+    config_path.write_bytes(exporter.json_bytes(config))
+    exporter.export(config_path)
+    portable = Path(config["output_directory"])
+    assert (portable / "submission.csv").read_bytes() == expected
+    assert (
+        json.loads((portable / "export_audit.json").read_bytes())["source_version"]
+        == audit["version"]
+    )
+
+
+@pytest.mark.parametrize("version", ["unrecognized-selection-v1", "portable-saved-selection-v1"])
+def test_unknown_or_inconsistent_source_versions_are_refused(tmp_path, capsys, version):
+    config_path, config, source, output = supplied(tmp_path)
+    rows, audit = saved_selection()
+    audit["version"] = version
+    config["source_integrity_sha256"] = seal(
+        source, rows, audit, manifest_version=exporter.SOURCE_VERSION
+    )
+    config_path.write_bytes(exporter.json_bytes(config))
+    refused(config_path, output, capsys)
 
 
 @pytest.mark.parametrize("chrom", ["1", "22", "X", "Y", "chr1", "chr22", "chrX", "chrY"])

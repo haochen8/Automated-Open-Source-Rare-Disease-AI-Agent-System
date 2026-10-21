@@ -1,0 +1,8 @@
+{
+  "source": "/absolute/restricted/path/original.vcf.gz",
+  "source_sha256": "REPLACE_WITH_VERIFIED_SOURCE_SHA256",
+  "output": "/absolute/restricted/path/source-plan",
+  "records_per_shard": 500,
+  "shard_record_limits": {},
+  "confirmed_local_research_use": false
+}
